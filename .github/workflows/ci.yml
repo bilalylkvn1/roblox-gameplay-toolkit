@@ -1,10 +1,14 @@
 name: Validate toolkit
-on: [push, pull_request]
+on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - name: Install official Luau 0.743
@@ -12,11 +16,31 @@ jobs:
           curl --fail --location --retry 3 https://github.com/luau-lang/luau/releases/download/0.743/luau-ubuntu.zip -o /tmp/luau.zip
           mkdir -p /tmp/luau
           unzip -q /tmp/luau.zip -d /tmp/luau
-          chmod +x /tmp/luau/luau /tmp/luau/luau-compile
+          chmod +x /tmp/luau/luau /tmp/luau/luau-compile /tmp/luau/luau-analyze
       - name: Compile all Luau files
         run: find src tests scripts examples -name '*.luau' -print0 | xargs -0 /tmp/luau/luau-compile --null
       - name: Exact currency suite
         run: /tmp/luau/luau scripts/money-tests.luau
+      - name: Gameplay utility suite
+        run: /tmp/luau/luau scripts/utility-tests.luau
+      - name: Analyze engine-independent code
+        run: /tmp/luau/luau-analyze src/Money.luau src/CleanupBag.luau src/Cooldown.luau src/RateLimiter.luau src/WeightedRandom.luau tests/Utilities.spec.luau scripts/utility-tests.luau
+      - name: Install official Lune 0.10.5 and StyLua 2.6.0
+        run: |
+          curl --fail --location --retry 3 https://github.com/lune-org/lune/releases/download/v0.10.5/lune-0.10.5-linux-x86_64.zip -o /tmp/lune.zip
+          mkdir -p /tmp/lune
+          unzip -q /tmp/lune.zip -d /tmp/lune
+          chmod +x /tmp/lune/lune
+          curl --fail --location --retry 3 https://github.com/JohnnyMorganz/StyLua/releases/download/v2.6.0/stylua-linux-x86_64.zip -o /tmp/stylua.zip
+          mkdir -p /tmp/stylua
+          unzip -q /tmp/stylua.zip -d /tmp/stylua
+          chmod +x /tmp/stylua/stylua
+      - name: Check Luau formatting
+        run: /tmp/stylua/stylua --check src tests scripts examples
+      - name: Portable roaming regressions and mocked animator lifecycle
+        run: |
+          /tmp/lune/lune run scripts/roaming-tests.luau
+          /tmp/lune/lune run scripts/animator-tests.luau
       - name: Install official Rojo 7.7.1
         run: |
           curl --fail --location --retry 3 https://github.com/rojo-rbx/rojo/releases/download/v7.7.1/rojo-7.7.1-linux-x86_64.zip -o /tmp/rojo.zip
@@ -25,6 +49,17 @@ jobs:
           chmod +x /tmp/rojo/rojo
       - name: Build Studio artifacts
         run: |
-          /tmp/rojo/rojo build default.project.json -o /tmp/GameplayToolkit.rbxmx
-          /tmp/rojo/rojo build demo.project.json -o /tmp/GameplayToolkitDemo.rbxlx
+          /tmp/rojo/rojo build default.project.json -o dist/GameplayToolkit.rbxmx
+          /tmp/rojo/rojo build demo.project.json -o dist/GameplayToolkitDemo.rbxlx
+      - name: Ensure committed Studio downloads match source
+        run: git diff --exit-code -- dist
+      - name: Upload validated Studio downloads
+        uses: actions/upload-artifact@v7
+        with:
+          name: GameplayToolkit-${{ github.sha }}
+          path: |
+            dist/GameplayToolkit.rbxmx
+            dist/GameplayToolkitDemo.rbxlx
+          if-no-files-found: error
+          retention-days: 14
 

@@ -2,7 +2,7 @@
 local Money = {}
 Money.MAX = "1000000000000000000"
 Money.MAX_SAFE_NUMBER = 9007199254740991
-function Money.Normalize(value)
+function Money.Normalize(value: any): string?
 	if type(value) == "number" then
 		if value ~= value or value < 0 or value > Money.MAX_SAFE_NUMBER or value % 1 ~= 0 then
 			return nil
@@ -82,6 +82,63 @@ function Money.Subtract(a, b)
 	end
 	return Money.Normalize(table.concat(out))
 end
+-- Grade-school multiplication never converts a balance to a floating-point number.
+function Money.Multiply(a, b)
+	a = assert(Money.Normalize(a), "Invalid Money")
+	b = assert(Money.Normalize(b), "Invalid Money")
+	if a == "0" or b == "0" then
+		return "0"
+	end
+	local digits = table.create(#a + #b, 0)
+	for i = #a, 1, -1 do
+		local x = string.byte(a, i) - 48
+		for j = #b, 1, -1 do
+			local index = (#a - i) + (#b - j) + 1
+			digits[index] += x * (string.byte(b, j) - 48)
+		end
+	end
+	for i = 1, #digits - 1 do
+		digits[i + 1] += math.floor(digits[i] / 10)
+		digits[i] %= 10
+	end
+	while #digits > 1 and digits[#digits] == 0 do
+		table.remove(digits)
+	end
+	if #digits > #Money.MAX then
+		return Money.MAX
+	end
+	local out = {}
+	for i = #digits, 1, -1 do
+		out[#out + 1] = tostring(digits[i])
+	end
+	return Money.Clamp(table.concat(out))
+end
+
+-- Exact floor division; the remainder satisfies a = quotient * b + remainder.
+-- Unlike reward-producing Add / Multiply, neither result is saturated.
+function Money.Divide(a, b)
+	a = assert(Money.Normalize(a), "Invalid Money")
+	b = assert(Money.Normalize(b), "Invalid Money")
+	assert(b ~= "0", "Cannot divide Money by zero")
+	local quotient, remainder = {}, "0"
+	for i = 1, #a do
+		remainder = assert(Money.Normalize(remainder .. a:sub(i, i)))
+		local digit = 0
+		while Money.Compare(remainder, b) >= 0 do
+			remainder = Money.Subtract(remainder, b)
+			digit += 1
+		end
+		quotient[#quotient + 1] = tostring(digit)
+	end
+	return Money.Normalize(table.concat(quotient)), remainder
+end
+
+function Money.FormatFull(value)
+	local s = Money.Normalize(value) or "0"
+	local reversed = s:reverse():gsub("(%d%d%d)", "%1,")
+	return (reversed:reverse():gsub("^,", ""))
+end
+
 function Money.Format(value)
 	local s = Money.Normalize(value) or "0"
 	if #s < 4 then

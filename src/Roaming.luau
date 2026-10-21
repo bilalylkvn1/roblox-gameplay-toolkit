@@ -5,7 +5,11 @@ local function finite(n)
 	return type(n) == "number" and n == n and math.abs(n) < math.huge
 end
 local function vector(v)
-	return typeof(v) == "Vector3" and finite(v.X) and finite(v.Y) and finite(v.Z)
+	return typeof(v) == "Vector3"
+		and finite(v.X)
+		and finite(v.Y)
+		and finite(v.Z)
+		and finite(v.Magnitude)
 end
 local function flat(v)
 	return Vector3.new(v.X, 0, v.Z)
@@ -25,7 +29,7 @@ local function angle(a, b)
 end
 local function limits(plan)
 	local margin = (plan.bodyHeight or 2.6) * 0.395 + (plan.edgePadding or 4)
-	return math.max(1, plan.boundsSize.X / 2 - margin), math.max(1, plan.boundsSize.Z / 2 - margin)
+	return plan.boundsSize.X / 2 - margin, plan.boundsSize.Z / 2 - margin
 end
 function Roaming.Clamp(plan, p)
 	local x, z = limits(plan)
@@ -94,7 +98,10 @@ function Roaming.Sample(plan, now)
 	end
 	local before = Roaming.Clamp(plan, raw(plan, math.max(0, age - 0.002)))
 	local speed = age > 0 and (p - before).Magnitude / math.min(age, 0.002) or plan.speed
-	return p, heading, (plan.travel or 0) + age * plan.speed, math.min(plan.speed, speed)
+	return p,
+		heading,
+		(plan.travel or 0) + age * plan.speed,
+		(now >= plan.expiresAt and 0 or math.min(plan.speed, speed))
 end
 function Roaming.Choose(plan, playerPosition, random)
 	random = random or math.random
@@ -147,6 +154,9 @@ function Roaming.Advance(plan, now, playerPosition, random)
 		return false
 	end
 	now = math.min(now, plan.expiresAt)
+	if plan.updatedAt and now < plan.updatedAt then
+		return false
+	end
 	local changed = false
 	if not plan.frame then
 		local heading = unit(plan.origin - playerPosition, plan.direction)
@@ -225,6 +235,7 @@ function Roaming.new(options)
 		"direction must have a horizontal component"
 	)
 	local x, z = limits(plan)
+	assert(x > 0 and z > 0, "boundsSize must leave room for the body margin and edgePadding")
 	local lp = plan.boundsFrame:PointToObjectSpace(plan.origin)
 	assert(
 		math.abs(lp.X) <= x and math.abs(lp.Z) <= z,
@@ -255,7 +266,8 @@ local function readVector(value)
 	then
 		return nil
 	end
-	return Vector3.new(value[1], value[2], value[3])
+	local result = Vector3.new(value[1], value[2], value[3])
+	return vector(result) and result or nil
 end
 
 -- Apply only trusted server snapshots on clients. This is validation, not gameplay authorization.
@@ -272,6 +284,7 @@ function Roaming.ApplySnapshot(plan, state)
 		state.t < plan.startsAt
 		or state.t > plan.expiresAt
 		or (plan.updatedAt and state.t < plan.updatedAt)
+		or (plan.travel and state.travel < plan.travel - 0.000001)
 	then
 		return false
 	end
@@ -287,7 +300,7 @@ function Roaming.ApplySnapshot(plan, state)
 	plan.frame = CFrame.lookAt(p, p + d)
 	plan.goal = g
 	plan.updatedAt = state.t
-	plan.travel = state.travel
+	plan.travel = math.max(plan.travel or 0, state.travel)
 	return true
 end
 
