@@ -2,7 +2,8 @@
 
 [![Validate toolkit](https://github.com/bilalylkvn1/roblox-gameplay-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/bilalylkvn1/roblox-gameplay-toolkit/actions/workflows/ci.yml)
 
-Reusable Luau systems for procedural pet animation, bounded roaming, and exact integer currency.
+Reusable Luau systems for pet animation, bounded roaming, exact currency, request limits,
+cooldowns, weighted choices, and resource cleanup.
 
 Extracted and adapted from systems developed for **Kick an Egg**. This is a new standalone
 open-source package. External adoption and performance benchmarks have not yet been established.
@@ -15,6 +16,10 @@ open-source package. External adoption and performance benchmarks have not yet b
 | `PetAnimator` | Client animation, smooth gait changes, signature moves, turn response, and distance culling |
 | `Roaming` | Server-selected curved movement inside upright, rotated rectangular bounds and a radius |
 | `Money` | Exact non-negative decimal integers, including values beyond floating-point integer precision |
+| `CleanupBag` | Reverse-order cleanup of callbacks, connections, and temporary objects; errors do not stop cleanup |
+| `Cooldown` | Per-player or per-action cooldowns with injectable clocks and bounded key storage |
+| `RateLimiter` | Token-bucket request limiting with per-key burst capacity, refill, and explicit pruning |
+| `WeightedRandom` | Reusable weighted selection with original indices and probability inspection |
 
 The package has no runtime package dependencies. The demo creates its own primitive geometry.
 
@@ -45,6 +50,19 @@ print(Money.FormatFull(total)) -- 27,021,597,764,222,979
 
 Add and Multiply saturate at 10^18. Divide returns an exact floor quotient and remainder;
 Subtract returns nil on underflow. See the [complete currency API](docs/money.md).
+
+## Common gameplay utilities
+
+```lua
+local requests = Toolkit.RateLimiter.new({ capacity = 6, refillRate = 2 })
+local kick = Toolkit.Cooldown.new({ duration = 1.5 })
+-- Inside a server handler, after receiving the server-provided Player:
+if not requests:Try(player) or not kick:Try(player) then return end
+```
+
+Forget player keys on PlayerRemoving and periodically Prune retained state.
+[Utility APIs and examples](docs/utilities.md) cover cleanup ownership, clock rollback,
+bounded memory, weighted choices, and a combined server interaction preview.
 
 ## Pet animation
 
@@ -123,6 +141,7 @@ For the engine-independent currency suite, use the
 
 ```sh
 luau scripts/money-tests.luau
+luau scripts/utility-tests.luau
 ```
 
 The portable movement and lifecycle regressions use [Lune 0.10.5](https://github.com/lune-org/lune/releases/tag/v0.10.5):
@@ -132,15 +151,17 @@ lune run scripts/roaming-tests.luau
 lune run scripts/animator-tests.luau
 ```
 
-CI compiles every Luau file, checks StyLua formatting, runs all three portable suites, and
-checks that both committed Studio downloads match a fresh Rojo build. Validated downloads
+CI compiles every Luau file, analyzes the engine-independent modules, checks StyLua formatting,
+runs the four portable suites, and checks that both committed Studio downloads match a fresh
+Rojo build. Validated downloads
 are also available as workflow artifacts. Roblox posing, physics, and rendering still require
 the separate Studio suites; Lune uses a documented math adapter and mocked lifecycle services.
 
 ## Project status
 
-Version **0.2.0** expands exact arithmetic and hardens roaming and animator lifecycle handling.
-The local portable suites pass 4,208 assertions. Current engine changes still need a Studio run;
+Version **0.2.0** adds four gameplay utilities, expands exact arithmetic, and hardens roaming
+and animator lifecycle handling. The local portable suites pass 4,694 assertions.
+Current engine changes and the new server interaction example still need a Studio run;
 the recorded 0.1.0 engine results are historical evidence, not validation of 0.2.0.
 See [validation and limitations](docs/validation.md) and [migration notes](CHANGELOG.md).
 The original game-specific creature art, custom boss rigs, sounds, purchase systems, account

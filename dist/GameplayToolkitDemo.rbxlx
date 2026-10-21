@@ -10,6 +10,10 @@
 return table.freeze({
 	Version = "0.2.0",
 	Money = require(script.Money),
+	CleanupBag = require(script.CleanupBag),
+	Cooldown = require(script.Cooldown),
+	RateLimiter = require(script.RateLimiter),
+	WeightedRandom = require(script.WeightedRandom),
 	Roaming = require(script.Roaming),
 	PetRig = require(script.PetRig),
 	PetAnimator = require(script.PetAnimator),
@@ -18,20 +22,231 @@ return table.freeze({
       </Properties>
       <Item class="ModuleScript" referent="2">
         <Properties>
+          <string name="Name">CleanupBag</string>
+          <string name="Source"><![CDATA[-- Owns callbacks, connections, and instances. No loops or services are started.
+local CleanupBag = {}
+CleanupBag.__index = CleanupBag
+
+local function cleanupFor(resource, method)
+	if type(resource) == "function" and method == nil then
+		return resource
+	end
+	if method == nil then
+		local kind = typeof(resource)
+		if kind == "RBXScriptConnection" then
+			method = "Disconnect"
+		elseif kind == "Instance" then
+			method = "Destroy"
+		elseif type(resource) == "table" then
+			method = type(resource.Destroy) == "function" and "Destroy" or "Disconnect"
+		end
+	end
+	assert(type(method) == "string" and #method > 0, "Expected a cleanup callback or method")
+	local fn = resource[method]
+	assert(type(fn) == "function", "Resource has no cleanup method: " .. method)
+	return function()
+		fn(resource)
+	end
+end
+
+local function execute(cleanup)
+	local ok, err = pcall(cleanup)
+	if ok then
+		return nil
+	end
+	local printable, message = pcall(tostring, err)
+	return printable and message or "Cleanup failed with an unprintable error"
+end
+
+function CleanupBag.new()
+	return setmetatable(
+		{ _entries = {}, _resources = {}, _cleaning = false, _destroyed = false },
+		CleanupBag
+	)
+end
+
+-- Returns the resource, plus an error only if immediate cleanup fails.
+function CleanupBag:Add(resource, method)
+	assert(resource ~= nil and resource ~= self, "Invalid cleanup resource")
+	local cleanup = cleanupFor(resource, method)
+	if self._destroyed or self._cleaning then
+		local err = execute(cleanup)
+		if err and self._errors then
+			table.insert(self._errors, err)
+		end
+		return resource, err
+	end
+	assert(not self._resources[resource], "Resource is already registered")
+	local entry = { Resource = resource, Cleanup = cleanup }
+	self._resources[resource] = entry
+	table.insert(self._entries, entry)
+	return resource
+end
+
+function CleanupBag:Remove(resource)
+	local entry = self._resources[resource]
+	if not entry then
+		return false
+	end
+	self._resources[resource] = nil
+	for i, candidate in ipairs(self._entries) do
+		if candidate == entry then
+			table.remove(self._entries, i)
+			break
+		end
+	end
+	return true, execute(entry.Cleanup)
+end
+
+-- Reverse registration order. All callbacks run even if one fails.
+function CleanupBag:Clean()
+	if self._cleaning then
+		return {}
+	end
+	local entries, errors = self._entries, {}
+	self._entries, self._resources = {}, {}
+	self._cleaning, self._errors = true, errors
+	for i = #entries, 1, -1 do
+		local err = execute(entries[i].Cleanup)
+		if err then
+			table.insert(errors, err)
+		end
+	end
+	self._cleaning, self._errors = false, nil
+	return errors
+end
+
+function CleanupBag:Destroy()
+	self._destroyed = true
+	return self:Clean()
+end
+
+return CleanupBag
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="3">
+        <Properties>
           <string name="Name">Config</string>
           <string name="Source"><![CDATA[-- Shared defaults. Pass matching Tag options to the rig builder and animator to isolate collections.
 return table.freeze({ PetTag = "GameplayToolkitPet", Version = "0.2.0" })
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="3">
+      <Item class="ModuleScript" referent="4">
+        <Properties>
+          <string name="Name">Cooldown</string>
+          <string name="Source"><![CDATA[-- Per-key cooldowns with a monotonic clock and an explicit memory budget.
+local Cooldown = {}
+Cooldown.__index = Cooldown
+local function finite(n)
+	return type(n) == "number" and n == n and math.abs(n) < math.huge
+end
+local function validKey(key)
+	assert(key ~= nil and (type(key) ~= "number" or finite(key)), "Expected a non-nil, finite key")
+end
+
+function Cooldown.new(options)
+	assert(type(options) == "table", "Expected cooldown options")
+	assert(
+		finite(options.duration) and options.duration >= 0,
+		"duration must be finite and non-negative"
+	)
+	local maxKeys = if options.maxKeys == nil then 1024 else options.maxKeys
+	assert(
+		finite(maxKeys) and maxKeys > 0 and maxKeys % 1 == 0,
+		"maxKeys must be a positive integer"
+	)
+	local clock = if options.clock == nil then os.clock else options.clock
+	assert(type(clock) == "function", "clock must be a function")
+	return setmetatable({
+		_duration = options.duration,
+		_clock = clock,
+		_maxKeys = maxKeys,
+		_deadlines = {},
+		_size = 0,
+	}, Cooldown)
+end
+
+function Cooldown:_Now()
+	local now = self._clock()
+	assert(finite(now), "clock must return a finite number")
+	now = math.max(now, self._lastTime or now)
+	self._lastTime = now
+	return now
+end
+
+function Cooldown:Try(key)
+	validKey(key)
+	local now = self:_Now()
+	local expires = self._deadlines[key]
+	if expires and expires > now then
+		return false, expires - now
+	end
+	if self._duration == 0 then
+		return true, 0
+	end
+	if not expires and self._size >= self._maxKeys then
+		return false, math.huge
+	end
+	local deadline = now + self._duration
+	assert(finite(deadline), "Cooldown deadline overflow")
+	if not expires then
+		self._size += 1
+	end
+	self._deadlines[key] = deadline
+	return true, 0
+end
+
+function Cooldown:Remaining(key)
+	validKey(key)
+	local now = self:_Now()
+	return math.max(0, (self._deadlines[key] or now) - now)
+end
+
+function Cooldown:Forget(key)
+	validKey(key)
+	if self._deadlines[key] == nil then
+		return false
+	end
+	self._deadlines[key] = nil
+	self._size -= 1
+	return true
+end
+
+function Cooldown:Prune()
+	local now, removed = self:_Now(), 0
+	for key, deadline in pairs(self._deadlines) do
+		if deadline <= now then
+			self._deadlines[key] = nil
+			self._size -= 1
+			removed += 1
+		end
+	end
+	return removed
+end
+
+function Cooldown:Clear()
+	table.clear(self._deadlines)
+	self._size = 0
+end
+
+function Cooldown:GetSize()
+	return self._size
+end
+
+return Cooldown
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="5">
         <Properties>
           <string name="Name">Money</string>
           <string name="Source"><![CDATA[-- Exact, non-negative decimal integers. NumberValues are display mirrors only.
 local Money = {}
 Money.MAX = "1000000000000000000"
 Money.MAX_SAFE_NUMBER = 9007199254740991
-function Money.Normalize(value)
+function Money.Normalize(value: any): string?
 	if type(value) == "number" then
 		if value ~= value or value < 0 or value > Money.MAX_SAFE_NUMBER or value % 1 ~= 0 then
 			return nil
@@ -182,7 +397,7 @@ return table.freeze(Money)
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="4">
+      <Item class="ModuleScript" referent="6">
         <Properties>
           <string name="Name">PetAnimator</string>
           <string name="Source"><![CDATA[-- Client-side procedural animation for every rigged pet and future template clones.
@@ -1324,7 +1539,7 @@ return PetAnimator
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="5">
+      <Item class="ModuleScript" referent="7">
         <Properties>
           <string name="Name">PetRig</string>
           <string name="Source"><![CDATA[-- Preserve the block art while replacing rigid root welds with articulated joints.
@@ -1913,7 +2128,126 @@ return PetRig
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="6">
+      <Item class="ModuleScript" referent="8">
+        <Properties>
+          <string name="Name">RateLimiter</string>
+          <string name="Source"><![CDATA[-- Token buckets per trusted key. Rejected attempts do not spend tokens.
+local RateLimiter = {}
+RateLimiter.__index = RateLimiter
+local function finite(n)
+	return type(n) == "number" and n == n and math.abs(n) < math.huge
+end
+local function validKey(key)
+	assert(key ~= nil and (type(key) ~= "number" or finite(key)), "Expected a non-nil, finite key")
+end
+
+function RateLimiter.new(options)
+	assert(type(options) == "table", "Expected limiter options")
+	assert(
+		finite(options.capacity) and options.capacity > 0,
+		"capacity must be positive and finite"
+	)
+	assert(
+		finite(options.refillRate) and options.refillRate > 0,
+		"refillRate must be positive and finite"
+	)
+	local maxKeys = if options.maxKeys == nil then 1024 else options.maxKeys
+	assert(
+		finite(maxKeys) and maxKeys > 0 and maxKeys % 1 == 0,
+		"maxKeys must be a positive integer"
+	)
+	local clock = if options.clock == nil then os.clock else options.clock
+	assert(type(clock) == "function", "clock must be a function")
+	return setmetatable({
+		_capacity = options.capacity,
+		_rate = options.refillRate,
+		_clock = clock,
+		_maxKeys = maxKeys,
+		_buckets = {},
+		_size = 0,
+	}, RateLimiter)
+end
+
+function RateLimiter:_Now()
+	local now = self._clock()
+	assert(finite(now), "clock must return a finite number")
+	now = math.max(now, self._lastTime or now)
+	self._lastTime = now
+	return now
+end
+
+function RateLimiter:_Tokens(bucket, now)
+	return math.min(self._capacity, bucket.tokens + (now - bucket.at) * self._rate)
+end
+
+-- allowed, secondsUntilCostAvailable, tokensLeft. A full key budget returns false, infinity, 0.
+function RateLimiter:Try(key, cost)
+	validKey(key)
+	cost = cost == nil and 1 or cost
+	assert(finite(cost) and cost > 0 and cost <= self._capacity, "cost must be in (0, capacity]")
+	local now = self:_Now()
+	local bucket = self._buckets[key]
+	if not bucket then
+		if self._size >= self._maxKeys then
+			return false, math.huge, 0
+		end
+		bucket = { tokens = self._capacity, at = now }
+		self._buckets[key] = bucket
+		self._size += 1
+	end
+	local tokens = self:_Tokens(bucket, now)
+	local allowed = tokens >= cost
+	if allowed then
+		tokens -= cost
+	end
+	bucket.tokens, bucket.at = tokens, now
+	return allowed, (allowed and 0 or (cost - tokens) / self._rate), tokens
+end
+
+function RateLimiter:Peek(key)
+	validKey(key)
+	local now = self:_Now()
+	local bucket = self._buckets[key]
+	return bucket and self:_Tokens(bucket, now) or self._capacity
+end
+
+function RateLimiter:Forget(key)
+	validKey(key)
+	if not self._buckets[key] then
+		return false
+	end
+	self._buckets[key] = nil
+	self._size -= 1
+	return true
+end
+
+-- Only remove fully refilled buckets, so pruning never grants extra tokens.
+function RateLimiter:Prune()
+	local now, removed = self:_Now(), 0
+	for key, bucket in pairs(self._buckets) do
+		if self:_Tokens(bucket, now) >= self._capacity then
+			self._buckets[key] = nil
+			self._size -= 1
+			removed += 1
+		end
+	end
+	return removed
+end
+
+function RateLimiter:Clear()
+	table.clear(self._buckets)
+	self._size = 0
+end
+
+function RateLimiter:GetSize()
+	return self._size
+end
+
+return RateLimiter
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="9">
         <Properties>
           <string name="Name">Roaming</string>
           <string name="Source"><![CDATA[-- Server chooses headings; all clients evaluate the same timed, curved movement segment.
@@ -2238,8 +2572,88 @@ return Roaming
 ]]></string>
         </Properties>
       </Item>
+      <Item class="ModuleScript" referent="10">
+        <Properties>
+          <string name="Name">WeightedRandom</string>
+          <string name="Source"><![CDATA[-- Immutable weighted choice table. Use trusted server randomness for gameplay rewards.
+local WeightedRandom = {}
+WeightedRandom.__index = WeightedRandom
+local function finite(n)
+	return type(n) == "number" and n == n and math.abs(n) < math.huge
+end
+
+function WeightedRandom.new(entries)
+	assert(type(entries) == "table" and #entries > 0, "Expected a non-empty entry array")
+	local count, maxWeight = 0, 0
+	for key, entry in pairs(entries) do
+		assert(
+			type(key) == "number" and key % 1 == 0 and key >= 1 and key <= #entries,
+			"Entries must be a dense array"
+		)
+		assert(type(entry) == "table" and entry.value ~= nil, "Entry must have a non-nil value")
+		assert(
+			finite(entry.weight) and entry.weight >= 0,
+			"Weights must be finite and non-negative"
+		)
+		count += 1
+		maxWeight = math.max(maxWeight, entry.weight)
+	end
+	assert(count == #entries and maxWeight > 0, "Expected a dense array with a positive weight")
+	local choices, total = {}, 0
+	for index, entry in ipairs(entries) do
+		if entry.weight > 0 then
+			local scaled = entry.weight / maxWeight
+			local nextTotal = total + scaled
+			assert(scaled > 0 and nextTotal > total, "Weight range exceeds numeric precision")
+			total = nextTotal
+			choices[#choices + 1] = table.freeze({
+				value = entry.value,
+				index = index,
+				weight = scaled,
+				cumulative = total,
+			})
+		end
+	end
+	return setmetatable({ _choices = table.freeze(choices), _total = total }, WeightedRandom)
+end
+
+function WeightedRandom:Pick(random)
+	random = if random == nil then math.random else random
+	assert(type(random) == "function", "random must be a function")
+	local roll = random()
+	assert(finite(roll) and roll >= 0 and roll <= 1, "random must return a number in [0, 1]")
+	local target = roll * self._total
+	local low, high = 1, #self._choices
+	while low < high do
+		local middle = math.floor((low + high) / 2)
+		if target < self._choices[middle].cumulative then
+			high = middle
+		else
+			low = middle + 1
+		end
+	end
+	local choice = self._choices[low]
+	return choice.value, choice.index
+end
+
+function WeightedRandom:GetProbabilities()
+	local result = {}
+	for _, choice in ipairs(self._choices) do
+		result[#result + 1] = {
+			value = choice.value,
+			index = choice.index,
+			probability = choice.weight / self._total,
+		}
+	end
+	return result
+end
+
+return WeightedRandom
+]]></string>
+        </Properties>
+      </Item>
     </Item>
-    <Item class="ModuleScript" referent="7">
+    <Item class="ModuleScript" referent="11">
       <Properties>
         <string name="Name">PetFactory</string>
         <string name="Source"><![CDATA[-- Original primitive demo geometry; no uploaded mesh, sound, texture or animation IDs.
@@ -2289,11 +2703,11 @@ end
       </Properties>
     </Item>
   </Item>
-  <Item class="ServerScriptService" referent="8">
+  <Item class="ServerScriptService" referent="12">
     <Properties>
       <string name="Name">ServerScriptService</string>
     </Properties>
-    <Item class="Script" referent="9">
+    <Item class="Script" referent="13">
       <Properties>
         <string name="Name">GameplayToolkitDemo</string>
         <token name="RunContext">0</token>
@@ -2348,15 +2762,15 @@ print("Exact currency demo:", Toolkit.Money.Add("9007199254740991", "10"))
       </Properties>
     </Item>
   </Item>
-  <Item class="ServerStorage" referent="10">
+  <Item class="ServerStorage" referent="14">
     <Properties>
       <string name="Name">ServerStorage</string>
     </Properties>
-    <Item class="Folder" referent="11">
+    <Item class="Folder" referent="15">
       <Properties>
         <string name="Name">GameplayToolkitTests</string>
       </Properties>
-      <Item class="ModuleScript" referent="12">
+      <Item class="ModuleScript" referent="16">
         <Properties>
           <string name="Name">Money.spec</string>
           <string name="Source"><![CDATA[return function(Money, check)
@@ -2460,7 +2874,7 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="13">
+      <Item class="ModuleScript" referent="17">
         <Properties>
           <string name="Name">Pets.spec</string>
           <string name="Source"><![CDATA[return function(Toolkit, check)
@@ -2590,7 +3004,7 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="14">
+      <Item class="ModuleScript" referent="18">
         <Properties>
           <string name="Name">Roaming.spec</string>
           <string name="Source"><![CDATA[return function(Roaming, check)
@@ -2752,7 +3166,7 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="15">
+      <Item class="ModuleScript" referent="19">
         <Properties>
           <string name="Name">Run</string>
           <string name="Source"><![CDATA[-- Run from Studio's Command Bar after installing the demo project.
@@ -2770,6 +3184,9 @@ return function(Toolkit)
 	run("Money", function(check)
 		require(script.Parent["Money.spec"])(Toolkit.Money, check)
 	end)
+	run("Utilities", function(check)
+		require(script.Parent["Utilities.spec"])(Toolkit, check)
+	end)
 	run("Roaming", function(check)
 		require(script.Parent["Roaming.spec"])(Toolkit.Roaming, check)
 	end)
@@ -2783,17 +3200,324 @@ end
 ]]></string>
         </Properties>
       </Item>
+      <Item class="ModuleScript" referent="20">
+        <Properties>
+          <string name="Name">Utilities.spec</string>
+          <string name="Source"><![CDATA[-- Engine-independent scenarios, shared by Luau CLI and Studio.
+return function(Toolkit, check)
+	local Bag, Cooldown, Limiter, Weighted =
+		Toolkit.CleanupBag, Toolkit.Cooldown, Toolkit.RateLimiter, Toolkit.WeightedRandom
+	local function fails(fn, message)
+		check(not pcall(fn), message)
+	end
+	local bag, order = Bag.new(), {}
+	local first = function()
+		table.insert(order, "first")
+	end
+	bag:Add(first)
+	bag:Add(function()
+		table.insert(order, "second")
+		error("expected cleanup failure")
+	end)
+	bag:Add(function()
+		table.insert(order, "third")
+	end)
+	fails(function()
+		bag:Add(first)
+	end, "duplicate registration rejected")
+	local errors = bag:Clean()
+	check(table.concat(order, ",") == "third,second,first", "LIFO cleanup survives callback errors")
+	check(
+		#errors == 1 and errors[1]:find("expected cleanup failure", 1, true),
+		"errors returned to caller"
+	)
+	check(#bag:Clean() == 0 and #order == 3, "cleanup is idempotent")
+	local calls = 0
+	local object = {
+		Destroy = function()
+			calls += 1
+		end,
+	}
+	check(bag:Add(object) == object, "Add returns original resource")
+	check(bag:Remove(object), "Remove runs registered cleanup")
+	check(not bag:Remove(object) and calls == 1, "Remove only runs once")
+	bag:Clean()
+	check(calls == 1, "removed resource is not cleaned again")
+	bag:Add({
+		Disconnect = function()
+			calls += 1
+		end,
+	})
+	bag:Add({
+		Close = function()
+			calls += 1
+		end,
+	}, "Close")
+	bag:Clean()
+	check(calls == 3, "table connections and explicit methods supported")
+	local nestedCount
+	bag:Add(function()
+		nestedCount = #bag:Clean()
+		bag:Add(function()
+			calls += 1
+		end)
+	end)
+	bag:Clean()
+	check(nestedCount == 0, "nested Clean is safe")
+	check(calls == 4, "resources added during cleanup are immediately cleaned")
+	bag:Destroy()
+	bag:Destroy()
+	bag:Add(function()
+		calls += 1
+	end)
+	check(calls == 5, "resources added after Destroy are immediately cleaned")
+	local _, lateError = bag:Add(function()
+		error("late cleanup")
+	end)
+	check(type(lateError) == "string", "late cleanup errors returned")
+	fails(function()
+		bag:Add(bag)
+	end, "bag cannot own itself")
+	fails(function()
+		Bag.new():Add({})
+	end, "invalid cleanup resource rejected")
+	local failingBag = Bag.new()
+	local failing = function()
+		error("remove failure")
+	end
+	failingBag:Add(failing)
+	local removed, removeError = failingBag:Remove(failing)
+	check(removed and type(removeError) == "string", "Remove reports callback failure")
+	local nestedErrors = Bag.new()
+	nestedErrors:Add(function()
+		nestedErrors:Add(function()
+			error("nested failure")
+		end)
+	end)
+	check(#nestedErrors:Clean() == 1, "immediate nested errors join the cleanup report")
+	local unprintable = Bag.new()
+	unprintable:Add(function()
+		error(setmetatable({}, {
+			__tostring = function()
+				error("broken error formatter")
+			end,
+		}))
+	end)
+	local safe, report = pcall(unprintable.Clean, unprintable)
+	check(
+		safe and #report == 1 and type(report[1]) == "string",
+		"error formatting cannot interrupt cleanup"
+	)
+
+	local now = 0
+	local function clock()
+		return now
+	end
+	local cooldown = Cooldown.new({ duration = 2, clock = clock, maxKeys = 2 })
+	check(cooldown:Try("a"), "first cooldown attempt allowed")
+	local allowed, wait = cooldown:Try("a")
+	check(not allowed and wait == 2, "cooldown returns remaining delay")
+	now = 1
+	check(cooldown:Remaining("a") == 1, "cooldown time decreases")
+	now = -10
+	check(cooldown:Remaining("a") == 1, "backwards clock cannot extend cooldown")
+	check(cooldown:Try("b"), "keys have independent cooldowns")
+	allowed, wait = cooldown:Try("c")
+	check(
+		not allowed and wait == math.huge and cooldown:GetSize() == 2,
+		"cooldown key budget bounded"
+	)
+	now = 2
+	check(cooldown:Try("a"), "exact deadline admits next attempt")
+	check(cooldown:Prune() == 0, "prune preserves active cooldowns")
+	check(cooldown:Forget("b") and not cooldown:Forget("b"), "cooldown Forget is idempotent")
+	check(cooldown:Try("c"), "Forget releases key budget")
+	now = 10
+	check(cooldown:Prune() == 2 and cooldown:GetSize() == 0, "expired cooldowns release memory")
+	check(cooldown:Remaining("missing") == 0 and cooldown:GetSize() == 0, "read does not allocate")
+	cooldown:Try("a")
+	cooldown:Clear()
+	check(cooldown:GetSize() == 0 and cooldown:Try("a"), "Clear resets all cooldowns")
+	local zero = Cooldown.new({ duration = 0, clock = clock, maxKeys = 1 })
+	check(zero:Try("a") and zero:Try("b") and zero:GetSize() == 0, "zero cooldown retains no keys")
+	now = 0 / 0
+	fails(function()
+		cooldown:Try("invalid-clock")
+	end, "invalid clock rejected")
+	check(cooldown:GetSize() == 1, "invalid clock leaves key storage unchanged")
+	now = 0
+	for _, duration in ipairs({ -1, math.huge, 0 / 0, "1" }) do
+		fails(function()
+			Cooldown.new({ duration = duration })
+		end, "invalid duration rejected")
+	end
+	fails(function()
+		Cooldown.new({ duration = 1, clock = false })
+	end, "invalid cooldown clock rejected")
+	fails(function()
+		Cooldown.new({ duration = 1, maxKeys = 0 })
+	end, "invalid key budget rejected")
+	fails(function()
+		cooldown:Try(nil)
+	end, "nil cooldown key rejected")
+	fails(function()
+		cooldown:Try(0 / 0)
+	end, "NaN cooldown key rejected")
+
+	local limiter = Limiter.new({ capacity = 3, refillRate = 2, clock = clock, maxKeys = 2 })
+	check(limiter:Peek("missing") == 3 and limiter:GetSize() == 0, "token read does not allocate")
+	allowed, wait = limiter:Try("a", 2)
+	check(allowed and wait == 0 and limiter:Peek("a") == 1, "weighted request spends tokens")
+	allowed, wait = limiter:Try("a", 2)
+	check(
+		not allowed and wait == 0.5 and limiter:Peek("a") == 1,
+		"rejected request does not spend tokens"
+	)
+	now = 0.5
+	check(limiter:Try("a", 2) and limiter:Peek("a") == 0, "tokens refill at configured rate")
+	now = -1
+	check(limiter:Peek("a") == 0, "backwards clock cannot mint tokens")
+	check(limiter:Try("b", 3), "separate keys get separate burst capacity")
+	allowed, wait = limiter:Try("c")
+	check(
+		not allowed and wait == math.huge and limiter:GetSize() == 2,
+		"limiter key budget bounded"
+	)
+	check(limiter:Prune() == 0, "prune does not forgive incomplete debt")
+	now = 2
+	check(limiter:Prune() == 2 and limiter:GetSize() == 0, "full buckets safely pruned")
+	check(limiter:Try("c", 3), "pruning releases budget without extra burst")
+	check(limiter:Forget("c") and not limiter:Forget("c"), "limiter Forget idempotent")
+	limiter:Try("a")
+	limiter:Clear()
+	check(limiter:GetSize() == 0, "limiter Clear resets key state")
+	for _, cost in ipairs({ 0, -1, 4, math.huge, 0 / 0 }) do
+		fails(function()
+			limiter:Try("a", cost)
+		end, "invalid token cost rejected")
+	end
+	check(limiter:GetSize() == 0, "invalid costs allocate no state")
+	fails(function()
+		Limiter.new({ capacity = 0, refillRate = 1 })
+	end, "invalid capacity rejected")
+	fails(function()
+		Limiter.new({ capacity = 3, refillRate = 0 })
+	end, "zero refill rejected")
+	fails(function()
+		Limiter.new({ capacity = 3, refillRate = 1, maxKeys = 0.5 })
+	end, "fractional budget rejected")
+	fails(function()
+		limiter:Try(nil)
+	end, "nil limiter key rejected")
+	local budget = Limiter.new({ capacity = 5, refillRate = 2, clock = clock })
+	local started, spent = now, 0
+	for i = 1, 200 do
+		now += (i % 3) * 0.25
+		local cost = i % 3 + 1
+		if budget:Try("same-player", cost) then
+			spent += cost
+		end
+		check(
+			spent <= 5 + 2 * (now - started),
+			"aggregate spend never exceeds initial burst plus refill"
+		)
+		local tokens = budget:Peek("same-player")
+		check(tokens >= 0 and tokens <= 5, "tokens stay within capacity")
+	end
+
+	local entries = {
+		{ value = "excluded", weight = 0 },
+		{ value = "common", weight = 1 },
+		{ value = "rare", weight = 3 },
+	}
+	local pool = Weighted.new(entries)
+	local value, index = pool:Pick(function()
+		return 0
+	end)
+	check(
+		value == "common" and index == 2,
+		"zero roll selects first positive weight with original index"
+	)
+	check(pool:Pick(function()
+		return 0.249
+	end) == "common", "lower interval boundary")
+	check(pool:Pick(function()
+		return 0.25
+	end) == "rare", "exact boundary selects next interval")
+	check(pool:Pick(function()
+		return 1
+	end) == "rare", "inclusive upper endpoint selects final entry")
+	entries[2].weight = 1000
+	entries[2].value = "changed"
+	check(pool:Pick(function()
+		return 0
+	end) == "common", "source mutation cannot change choices")
+	local probabilities = pool:GetProbabilities()
+	check(
+		#probabilities == 2
+			and probabilities[1].probability == 0.25
+			and probabilities[2].probability == 0.75,
+		"probabilities omit zero weights and sum to one"
+	)
+	probabilities[1].value = "changed"
+	check(pool:GetProbabilities()[1].value == "common", "probabilities are detached copies")
+	local common = 0
+	for i = 1, 40 do
+		if pool:Pick(function()
+			return (i - 0.5) / 40
+		end) == "common" then
+			common += 1
+		end
+	end
+	check(common == 10, "deterministic uniform grid matches expected weight proportions")
+	local huge = Weighted.new({ { value = 1, weight = 1e308 }, { value = 2, weight = 1e308 } })
+	check(huge:GetProbabilities()[1].probability == 0.5, "weight normalization avoids sum overflow")
+	for _, roll in ipairs({ -1, 1.1, math.huge, 0 / 0, "0.5" }) do
+		fails(function()
+			pool:Pick(function()
+				return roll
+			end)
+		end, "invalid random output rejected")
+	end
+	fails(function()
+		pool:Pick(false)
+	end, "invalid random callback rejected")
+	fails(function()
+		Weighted.new({})
+	end, "empty pool rejected")
+	fails(function()
+		Weighted.new({ { value = 1, weight = 0 } })
+	end, "all-zero weights rejected")
+	fails(function()
+		Weighted.new({ { weight = 1 } })
+	end, "nil value rejected")
+	fails(function()
+		Weighted.new({ { value = 1, weight = -1 } })
+	end, "negative weight rejected")
+	fails(function()
+		Weighted.new({ { value = 1, weight = math.huge } })
+	end, "non-finite weight rejected")
+	fails(function()
+		Weighted.new({ [1] = { value = 1, weight = 1 }, [3] = { value = 3, weight = 1 } })
+	end, "sparse entry array rejected")
+	fails(function()
+		Weighted.new({ { value = 1, weight = 1 }, { value = 2, weight = 1e-300 } })
+	end, "unrepresentable weight interval rejected")
+end
+]]></string>
+        </Properties>
+      </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="16">
+  <Item class="StarterPlayer" referent="21">
     <Properties>
       <string name="Name">StarterPlayer</string>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="17">
+    <Item class="StarterPlayerScripts" referent="22">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="LocalScript" referent="18">
+      <Item class="LocalScript" referent="23">
         <Properties>
           <string name="Name">GameplayToolkitDemo</string>
           <string name="Source"><![CDATA[local Toolkit = require(game:GetService("ReplicatedStorage"):WaitForChild("GameplayToolkit"))
@@ -2807,13 +3531,13 @@ end)
       </Item>
     </Item>
   </Item>
-  <Item class="Workspace" referent="19">
+  <Item class="Workspace" referent="24">
     <Properties>
       <string name="Name">Workspace</string>
       <float name="Gravity">196.2</float>
       <bool name="NeedsPivotMigration">false</bool>
     </Properties>
-    <Item class="Part" referent="20">
+    <Item class="Part" referent="25">
       <Properties>
         <string name="Name">Floor</string>
         <bool name="Anchored">true</bool>
@@ -2831,7 +3555,7 @@ end)
         </Vector3>
       </Properties>
     </Item>
-    <Item class="SpawnLocation" referent="21">
+    <Item class="SpawnLocation" referent="26">
       <Properties>
         <string name="Name">Spawn</string>
         <bool name="Anchored">true</bool>

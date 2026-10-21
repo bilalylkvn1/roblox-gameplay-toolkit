@@ -2,6 +2,10 @@
 
 ## 0.2.0 — 2026-10-21
 
+- Add CleanupBag for reverse-order, error-isolated cleanup of callbacks, objects, and connections.
+- Add per-key Cooldown and token-bucket RateLimiter with injectable clocks, explicit pruning, and bounded key counts.
+- Add WeightedRandom with validated weights, original entry indices, and probability inspection.
+- Add shared engine-independent utility tests and a guarded server interaction preview example.
 - Add exact saturated Money.Multiply, quotient/remainder Money.Divide, and Money.FormatFull.
 - Fix tiny roaming bounds expanding outside their physical rectangle; reject margins with no usable area.
 - Reject overflowing snapshot vectors and decreasing travel; ignore backwards Advance clocks.

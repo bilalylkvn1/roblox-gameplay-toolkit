@@ -7,6 +7,7 @@ Keep changes focused. From the repository root run:
 
 ```sh
 luau scripts/money-tests.luau
+luau scripts/utility-tests.luau
 lune run scripts/roaming-tests.luau
 lune run scripts/animator-tests.luau
 stylua --check src tests scripts examples

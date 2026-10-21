@@ -5,11 +5,13 @@
   "tools": {"luau": "0.743", "lune": "0.10.5", "rojo": "7.7.1", "stylua": "2.6.0"},
   "portable": {
     "Money": {"assertions": 2454, "result": "passed", "runtime": "Luau CLI"},
+    "Utilities": {"assertions": 486, "result": "passed", "runtime": "Luau CLI; injected clocks and table cleanup resources"},
     "Roaming": {"assertions": 1737, "result": "passed", "runtime": "Lune math/JSON adapter with upright lookAt substitute"},
     "AnimatorLifecycle": {"assertions": 17, "result": "passed", "runtime": "Lune with explicit service mocks; geometry operations replaced"},
-    "totalAssertions": 4208
+    "totalAssertions": 4694
   },
   "compile": "passed",
+  "analyzeEngineIndependentCode": "passed",
   "format": "passed",
   "builds": {"GameplayToolkit.rbxmx": "passed", "GameplayToolkitDemo.rbxlx": "passed", "repeatBuildsIdentical": true},
   "engine": {"result": "not_run", "reason": "No connected Studio instance", "previousVersionRecord": "validation-v0.1.0.json"},

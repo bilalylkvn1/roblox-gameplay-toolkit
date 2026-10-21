@@ -2,7 +2,7 @@
 local Money = {}
 Money.MAX = "1000000000000000000"
 Money.MAX_SAFE_NUMBER = 9007199254740991
-function Money.Normalize(value)
+function Money.Normalize(value: any): string?
 	if type(value) == "number" then
 		if value ~= value or value < 0 or value > Money.MAX_SAFE_NUMBER or value % 1 ~= 0 then
 			return nil

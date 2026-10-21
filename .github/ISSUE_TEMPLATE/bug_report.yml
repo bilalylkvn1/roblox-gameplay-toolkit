@@ -5,7 +5,7 @@ body:
     id: module
     attributes:
       label: Affected module
-      options: [Money, Roaming, PetRig, PetAnimator, Demo or installation, Other]
+      options: [Money, Roaming, PetRig, PetAnimator, CleanupBag, Cooldown, RateLimiter, WeightedRandom, Demo or installation, Other]
     validations:
       required: true
   - type: input

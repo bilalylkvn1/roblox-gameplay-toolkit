@@ -8,6 +8,8 @@ Lune 0.10.5, StyLua 2.6.0, and Rojo 7.7.1. Machine-readable results are in
 | --- | --- | --- |
 | Luau compile | Every source, example, test, and runner | Passed |
 | Money (Luau CLI) | 2,454 assertions: precision, invalid input, carries/borrows, saturation, multiplication, division identities, remainder, grouping | Passed |
+| Utilities (Luau CLI) | 486 assertions: cleanup errors/reentrancy, cooldowns, token budgets, clock rollback, key limits, weighted choice boundaries | Passed |
+| Luau analyze | Money, four utility modules, utility spec and runner | Passed |
 | Roaming (Lune) | 1,737 assertions: ordinary/rotated/tiny bounds, expiry, snapshot validation, bounded pause recovery | Passed |
 | Animator (mocked Lune lifecycle) | 17 assertions: coalesced events, cancellation, restart, cleanup, action options | Passed |
 | StyLua | Source, examples, tests, runners | Passed |
@@ -33,7 +35,11 @@ deferred scheduling, and the client flag. Geometry attachment, detachment, and p
 with counters. This tests lifecycle control and configuration validation only; it says nothing
 about Motor6D rendering, client skinning, physics, or real streaming ordering.
 
-CI runs these portable checks, formatting, compilation, and builds. It also rejects committed
+Utility scenarios use the same spec in Luau CLI and Studio. Cleanup resources are table doubles;
+actual Instance/connection inference and the RemoteEvent preview example have not been run in Studio.
+Timing tests use injected clocks, so expiry and rollback cases need no sleeps.
+
+CI runs these portable checks, analysis, formatting, compilation, and builds. It also rejects committed
 Studio downloads that differ from a fresh build, and uploads the validated files.
 
 ## Studio reproduction

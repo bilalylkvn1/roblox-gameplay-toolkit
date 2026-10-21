@@ -16,11 +16,15 @@ jobs:
           curl --fail --location --retry 3 https://github.com/luau-lang/luau/releases/download/0.743/luau-ubuntu.zip -o /tmp/luau.zip
           mkdir -p /tmp/luau
           unzip -q /tmp/luau.zip -d /tmp/luau
-          chmod +x /tmp/luau/luau /tmp/luau/luau-compile
+          chmod +x /tmp/luau/luau /tmp/luau/luau-compile /tmp/luau/luau-analyze
       - name: Compile all Luau files
         run: find src tests scripts examples -name '*.luau' -print0 | xargs -0 /tmp/luau/luau-compile --null
       - name: Exact currency suite
         run: /tmp/luau/luau scripts/money-tests.luau
+      - name: Gameplay utility suite
+        run: /tmp/luau/luau scripts/utility-tests.luau
+      - name: Analyze engine-independent code
+        run: /tmp/luau/luau-analyze src/Money.luau src/CleanupBag.luau src/Cooldown.luau src/RateLimiter.luau src/WeightedRandom.luau tests/Utilities.spec.luau scripts/utility-tests.luau
       - name: Install official Lune 0.10.5 and StyLua 2.6.0
         run: |
           curl --fail --location --retry 3 https://github.com/lune-org/lune/releases/download/v0.10.5/lune-0.10.5-linux-x86_64.zip -o /tmp/lune.zip

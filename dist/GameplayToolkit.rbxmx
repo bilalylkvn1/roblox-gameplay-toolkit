@@ -6,6 +6,10 @@
 return table.freeze({
 	Version = "0.2.0",
 	Money = require(script.Money),
+	CleanupBag = require(script.CleanupBag),
+	Cooldown = require(script.Cooldown),
+	RateLimiter = require(script.RateLimiter),
+	WeightedRandom = require(script.WeightedRandom),
 	Roaming = require(script.Roaming),
 	PetRig = require(script.PetRig),
 	PetAnimator = require(script.PetAnimator),
@@ -14,20 +18,231 @@ return table.freeze({
     </Properties>
     <Item class="ModuleScript" referent="1">
       <Properties>
+        <string name="Name">CleanupBag</string>
+        <string name="Source"><![CDATA[-- Owns callbacks, connections, and instances. No loops or services are started.
+local CleanupBag = {}
+CleanupBag.__index = CleanupBag
+
+local function cleanupFor(resource, method)
+	if type(resource) == "function" and method == nil then
+		return resource
+	end
+	if method == nil then
+		local kind = typeof(resource)
+		if kind == "RBXScriptConnection" then
+			method = "Disconnect"
+		elseif kind == "Instance" then
+			method = "Destroy"
+		elseif type(resource) == "table" then
+			method = type(resource.Destroy) == "function" and "Destroy" or "Disconnect"
+		end
+	end
+	assert(type(method) == "string" and #method > 0, "Expected a cleanup callback or method")
+	local fn = resource[method]
+	assert(type(fn) == "function", "Resource has no cleanup method: " .. method)
+	return function()
+		fn(resource)
+	end
+end
+
+local function execute(cleanup)
+	local ok, err = pcall(cleanup)
+	if ok then
+		return nil
+	end
+	local printable, message = pcall(tostring, err)
+	return printable and message or "Cleanup failed with an unprintable error"
+end
+
+function CleanupBag.new()
+	return setmetatable(
+		{ _entries = {}, _resources = {}, _cleaning = false, _destroyed = false },
+		CleanupBag
+	)
+end
+
+-- Returns the resource, plus an error only if immediate cleanup fails.
+function CleanupBag:Add(resource, method)
+	assert(resource ~= nil and resource ~= self, "Invalid cleanup resource")
+	local cleanup = cleanupFor(resource, method)
+	if self._destroyed or self._cleaning then
+		local err = execute(cleanup)
+		if err and self._errors then
+			table.insert(self._errors, err)
+		end
+		return resource, err
+	end
+	assert(not self._resources[resource], "Resource is already registered")
+	local entry = { Resource = resource, Cleanup = cleanup }
+	self._resources[resource] = entry
+	table.insert(self._entries, entry)
+	return resource
+end
+
+function CleanupBag:Remove(resource)
+	local entry = self._resources[resource]
+	if not entry then
+		return false
+	end
+	self._resources[resource] = nil
+	for i, candidate in ipairs(self._entries) do
+		if candidate == entry then
+			table.remove(self._entries, i)
+			break
+		end
+	end
+	return true, execute(entry.Cleanup)
+end
+
+-- Reverse registration order. All callbacks run even if one fails.
+function CleanupBag:Clean()
+	if self._cleaning then
+		return {}
+	end
+	local entries, errors = self._entries, {}
+	self._entries, self._resources = {}, {}
+	self._cleaning, self._errors = true, errors
+	for i = #entries, 1, -1 do
+		local err = execute(entries[i].Cleanup)
+		if err then
+			table.insert(errors, err)
+		end
+	end
+	self._cleaning, self._errors = false, nil
+	return errors
+end
+
+function CleanupBag:Destroy()
+	self._destroyed = true
+	return self:Clean()
+end
+
+return CleanupBag
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="2">
+      <Properties>
         <string name="Name">Config</string>
         <string name="Source"><![CDATA[-- Shared defaults. Pass matching Tag options to the rig builder and animator to isolate collections.
 return table.freeze({ PetTag = "GameplayToolkitPet", Version = "0.2.0" })
 ]]></string>
       </Properties>
     </Item>
-    <Item class="ModuleScript" referent="2">
+    <Item class="ModuleScript" referent="3">
+      <Properties>
+        <string name="Name">Cooldown</string>
+        <string name="Source"><![CDATA[-- Per-key cooldowns with a monotonic clock and an explicit memory budget.
+local Cooldown = {}
+Cooldown.__index = Cooldown
+local function finite(n)
+	return type(n) == "number" and n == n and math.abs(n) < math.huge
+end
+local function validKey(key)
+	assert(key ~= nil and (type(key) ~= "number" or finite(key)), "Expected a non-nil, finite key")
+end
+
+function Cooldown.new(options)
+	assert(type(options) == "table", "Expected cooldown options")
+	assert(
+		finite(options.duration) and options.duration >= 0,
+		"duration must be finite and non-negative"
+	)
+	local maxKeys = if options.maxKeys == nil then 1024 else options.maxKeys
+	assert(
+		finite(maxKeys) and maxKeys > 0 and maxKeys % 1 == 0,
+		"maxKeys must be a positive integer"
+	)
+	local clock = if options.clock == nil then os.clock else options.clock
+	assert(type(clock) == "function", "clock must be a function")
+	return setmetatable({
+		_duration = options.duration,
+		_clock = clock,
+		_maxKeys = maxKeys,
+		_deadlines = {},
+		_size = 0,
+	}, Cooldown)
+end
+
+function Cooldown:_Now()
+	local now = self._clock()
+	assert(finite(now), "clock must return a finite number")
+	now = math.max(now, self._lastTime or now)
+	self._lastTime = now
+	return now
+end
+
+function Cooldown:Try(key)
+	validKey(key)
+	local now = self:_Now()
+	local expires = self._deadlines[key]
+	if expires and expires > now then
+		return false, expires - now
+	end
+	if self._duration == 0 then
+		return true, 0
+	end
+	if not expires and self._size >= self._maxKeys then
+		return false, math.huge
+	end
+	local deadline = now + self._duration
+	assert(finite(deadline), "Cooldown deadline overflow")
+	if not expires then
+		self._size += 1
+	end
+	self._deadlines[key] = deadline
+	return true, 0
+end
+
+function Cooldown:Remaining(key)
+	validKey(key)
+	local now = self:_Now()
+	return math.max(0, (self._deadlines[key] or now) - now)
+end
+
+function Cooldown:Forget(key)
+	validKey(key)
+	if self._deadlines[key] == nil then
+		return false
+	end
+	self._deadlines[key] = nil
+	self._size -= 1
+	return true
+end
+
+function Cooldown:Prune()
+	local now, removed = self:_Now(), 0
+	for key, deadline in pairs(self._deadlines) do
+		if deadline <= now then
+			self._deadlines[key] = nil
+			self._size -= 1
+			removed += 1
+		end
+	end
+	return removed
+end
+
+function Cooldown:Clear()
+	table.clear(self._deadlines)
+	self._size = 0
+end
+
+function Cooldown:GetSize()
+	return self._size
+end
+
+return Cooldown
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="4">
       <Properties>
         <string name="Name">Money</string>
         <string name="Source"><![CDATA[-- Exact, non-negative decimal integers. NumberValues are display mirrors only.
 local Money = {}
 Money.MAX = "1000000000000000000"
 Money.MAX_SAFE_NUMBER = 9007199254740991
-function Money.Normalize(value)
+function Money.Normalize(value: any): string?
 	if type(value) == "number" then
 		if value ~= value or value < 0 or value > Money.MAX_SAFE_NUMBER or value % 1 ~= 0 then
 			return nil
@@ -178,7 +393,7 @@ return table.freeze(Money)
 ]]></string>
       </Properties>
     </Item>
-    <Item class="ModuleScript" referent="3">
+    <Item class="ModuleScript" referent="5">
       <Properties>
         <string name="Name">PetAnimator</string>
         <string name="Source"><![CDATA[-- Client-side procedural animation for every rigged pet and future template clones.
@@ -1320,7 +1535,7 @@ return PetAnimator
 ]]></string>
       </Properties>
     </Item>
-    <Item class="ModuleScript" referent="4">
+    <Item class="ModuleScript" referent="6">
       <Properties>
         <string name="Name">PetRig</string>
         <string name="Source"><![CDATA[-- Preserve the block art while replacing rigid root welds with articulated joints.
@@ -1909,7 +2124,126 @@ return PetRig
 ]]></string>
       </Properties>
     </Item>
-    <Item class="ModuleScript" referent="5">
+    <Item class="ModuleScript" referent="7">
+      <Properties>
+        <string name="Name">RateLimiter</string>
+        <string name="Source"><![CDATA[-- Token buckets per trusted key. Rejected attempts do not spend tokens.
+local RateLimiter = {}
+RateLimiter.__index = RateLimiter
+local function finite(n)
+	return type(n) == "number" and n == n and math.abs(n) < math.huge
+end
+local function validKey(key)
+	assert(key ~= nil and (type(key) ~= "number" or finite(key)), "Expected a non-nil, finite key")
+end
+
+function RateLimiter.new(options)
+	assert(type(options) == "table", "Expected limiter options")
+	assert(
+		finite(options.capacity) and options.capacity > 0,
+		"capacity must be positive and finite"
+	)
+	assert(
+		finite(options.refillRate) and options.refillRate > 0,
+		"refillRate must be positive and finite"
+	)
+	local maxKeys = if options.maxKeys == nil then 1024 else options.maxKeys
+	assert(
+		finite(maxKeys) and maxKeys > 0 and maxKeys % 1 == 0,
+		"maxKeys must be a positive integer"
+	)
+	local clock = if options.clock == nil then os.clock else options.clock
+	assert(type(clock) == "function", "clock must be a function")
+	return setmetatable({
+		_capacity = options.capacity,
+		_rate = options.refillRate,
+		_clock = clock,
+		_maxKeys = maxKeys,
+		_buckets = {},
+		_size = 0,
+	}, RateLimiter)
+end
+
+function RateLimiter:_Now()
+	local now = self._clock()
+	assert(finite(now), "clock must return a finite number")
+	now = math.max(now, self._lastTime or now)
+	self._lastTime = now
+	return now
+end
+
+function RateLimiter:_Tokens(bucket, now)
+	return math.min(self._capacity, bucket.tokens + (now - bucket.at) * self._rate)
+end
+
+-- allowed, secondsUntilCostAvailable, tokensLeft. A full key budget returns false, infinity, 0.
+function RateLimiter:Try(key, cost)
+	validKey(key)
+	cost = cost == nil and 1 or cost
+	assert(finite(cost) and cost > 0 and cost <= self._capacity, "cost must be in (0, capacity]")
+	local now = self:_Now()
+	local bucket = self._buckets[key]
+	if not bucket then
+		if self._size >= self._maxKeys then
+			return false, math.huge, 0
+		end
+		bucket = { tokens = self._capacity, at = now }
+		self._buckets[key] = bucket
+		self._size += 1
+	end
+	local tokens = self:_Tokens(bucket, now)
+	local allowed = tokens >= cost
+	if allowed then
+		tokens -= cost
+	end
+	bucket.tokens, bucket.at = tokens, now
+	return allowed, (allowed and 0 or (cost - tokens) / self._rate), tokens
+end
+
+function RateLimiter:Peek(key)
+	validKey(key)
+	local now = self:_Now()
+	local bucket = self._buckets[key]
+	return bucket and self:_Tokens(bucket, now) or self._capacity
+end
+
+function RateLimiter:Forget(key)
+	validKey(key)
+	if not self._buckets[key] then
+		return false
+	end
+	self._buckets[key] = nil
+	self._size -= 1
+	return true
+end
+
+-- Only remove fully refilled buckets, so pruning never grants extra tokens.
+function RateLimiter:Prune()
+	local now, removed = self:_Now(), 0
+	for key, bucket in pairs(self._buckets) do
+		if self:_Tokens(bucket, now) >= self._capacity then
+			self._buckets[key] = nil
+			self._size -= 1
+			removed += 1
+		end
+	end
+	return removed
+end
+
+function RateLimiter:Clear()
+	table.clear(self._buckets)
+	self._size = 0
+end
+
+function RateLimiter:GetSize()
+	return self._size
+end
+
+return RateLimiter
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="8">
       <Properties>
         <string name="Name">Roaming</string>
         <string name="Source"><![CDATA[-- Server chooses headings; all clients evaluate the same timed, curved movement segment.
@@ -2231,6 +2565,86 @@ function Roaming.Decode(plan, value)
 end
 
 return Roaming
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="9">
+      <Properties>
+        <string name="Name">WeightedRandom</string>
+        <string name="Source"><![CDATA[-- Immutable weighted choice table. Use trusted server randomness for gameplay rewards.
+local WeightedRandom = {}
+WeightedRandom.__index = WeightedRandom
+local function finite(n)
+	return type(n) == "number" and n == n and math.abs(n) < math.huge
+end
+
+function WeightedRandom.new(entries)
+	assert(type(entries) == "table" and #entries > 0, "Expected a non-empty entry array")
+	local count, maxWeight = 0, 0
+	for key, entry in pairs(entries) do
+		assert(
+			type(key) == "number" and key % 1 == 0 and key >= 1 and key <= #entries,
+			"Entries must be a dense array"
+		)
+		assert(type(entry) == "table" and entry.value ~= nil, "Entry must have a non-nil value")
+		assert(
+			finite(entry.weight) and entry.weight >= 0,
+			"Weights must be finite and non-negative"
+		)
+		count += 1
+		maxWeight = math.max(maxWeight, entry.weight)
+	end
+	assert(count == #entries and maxWeight > 0, "Expected a dense array with a positive weight")
+	local choices, total = {}, 0
+	for index, entry in ipairs(entries) do
+		if entry.weight > 0 then
+			local scaled = entry.weight / maxWeight
+			local nextTotal = total + scaled
+			assert(scaled > 0 and nextTotal > total, "Weight range exceeds numeric precision")
+			total = nextTotal
+			choices[#choices + 1] = table.freeze({
+				value = entry.value,
+				index = index,
+				weight = scaled,
+				cumulative = total,
+			})
+		end
+	end
+	return setmetatable({ _choices = table.freeze(choices), _total = total }, WeightedRandom)
+end
+
+function WeightedRandom:Pick(random)
+	random = if random == nil then math.random else random
+	assert(type(random) == "function", "random must be a function")
+	local roll = random()
+	assert(finite(roll) and roll >= 0 and roll <= 1, "random must return a number in [0, 1]")
+	local target = roll * self._total
+	local low, high = 1, #self._choices
+	while low < high do
+		local middle = math.floor((low + high) / 2)
+		if target < self._choices[middle].cumulative then
+			high = middle
+		else
+			low = middle + 1
+		end
+	end
+	local choice = self._choices[low]
+	return choice.value, choice.index
+end
+
+function WeightedRandom:GetProbabilities()
+	local result = {}
+	for _, choice in ipairs(self._choices) do
+		result[#result + 1] = {
+			value = choice.value,
+			index = choice.index,
+			probability = choice.weight / self._total,
+		}
+	end
+	return result
+end
+
+return WeightedRandom
 ]]></string>
       </Properties>
     </Item>
