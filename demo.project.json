@@ -1,0 +1,76 @@
+{
+  "name": "GameplayToolkitDemo",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "GameplayToolkit": {
+        "$path": "src"
+      },
+      "PetFactory": {
+        "$path": "examples/PetFactory.luau"
+      }
+    },
+    "ServerScriptService": {
+      "GameplayToolkitDemo": {
+        "$path": "examples/Demo.server.luau"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "GameplayToolkitDemo": {
+          "$path": "examples/Demo.client.luau"
+        }
+      }
+    },
+    "ServerStorage": {
+      "GameplayToolkitTests": {
+        "$path": "tests"
+      }
+    },
+    "Workspace": {
+      "$properties": {
+        "Gravity": 196.2
+      },
+      "Spawn": {
+        "$className": "SpawnLocation",
+        "$properties": {
+          "Anchored": true,
+          "Size": [
+            8,
+            1,
+            8
+          ],
+          "Position": [
+            0,
+            1,
+            20
+          ],
+          "Neutral": true
+        }
+      },
+      "Floor": {
+        "$className": "Part",
+        "$properties": {
+          "Anchored": true,
+          "Size": [
+            90,
+            1,
+            70
+          ],
+          "Position": [
+            0,
+            -0.5,
+            0
+          ],
+          "Color": [
+            0.16,
+            0.2,
+            0.25
+          ],
+          "Material": "SmoothPlastic"
+        }
+      }
+    }
+  }
+}
+

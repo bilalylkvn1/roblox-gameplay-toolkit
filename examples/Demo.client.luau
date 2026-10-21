@@ -1,0 +1,6 @@
+local Toolkit = require(game:GetService("ReplicatedStorage"):WaitForChild("GameplayToolkit"))
+local animator = Toolkit.PetAnimator.new()
+animator:Start()
+script.Destroying:Connect(function()
+	animator:Stop()
+end)

@@ -1,0 +1,12 @@
+# Local tools and private development artifacts
+.DS_Store
+*.log
+*.tmp
+*.rbxl
+*.rbxl.lock
+*.rbxlx.lock
+tools/
+private/
+.env
+.env.*
+

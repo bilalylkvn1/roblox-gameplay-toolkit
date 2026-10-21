@@ -1,0 +1,8 @@
+* text=auto
+*.luau text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.rbxmx text eol=lf
+*.rbxlx text eol=lf
+

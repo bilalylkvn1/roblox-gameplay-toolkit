@@ -1,0 +1,2125 @@
+<roblox version="4">
+  <Item class="ModuleScript" referent="0">
+    <Properties>
+      <string name="Name">GameplayToolkit</string>
+      <string name="Source"><![CDATA[-- Requiring the toolkit starts no loops and creates no instances.
+return table.freeze({
+	Version = "0.1.0",
+	Money = require(script.Money),
+	Roaming = require(script.Roaming),
+	PetRig = require(script.PetRig),
+	PetAnimator = require(script.PetAnimator),
+})
+]]></string>
+    </Properties>
+    <Item class="ModuleScript" referent="1">
+      <Properties>
+        <string name="Name">Config</string>
+        <string name="Source"><![CDATA[-- Shared defaults. Pass matching Tag options to the rig builder and animator to isolate collections.
+return table.freeze({ PetTag = "GameplayToolkitPet", Version = "0.1.0" })
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="2">
+      <Properties>
+        <string name="Name">Money</string>
+        <string name="Source"><![CDATA[-- Exact, non-negative decimal integers. NumberValues are display mirrors only.
+local Money = {}
+Money.MAX = "1000000000000000000"
+Money.MAX_SAFE_NUMBER = 9007199254740991
+function Money.Normalize(value)
+	if type(value) == "number" then
+		if value ~= value or value < 0 or value > Money.MAX_SAFE_NUMBER or value % 1 ~= 0 then
+			return nil
+		end
+		value = string.format("%.0f", value)
+	end
+	if type(value) ~= "string" or #value > 40 or not value:match("^%d+$") then
+		return nil
+	end
+	value = value:gsub("^0+", "")
+	return value == "" and "0" or value
+end
+function Money.Compare(a, b)
+	a = assert(Money.Normalize(a), "Invalid Money")
+	b = assert(Money.Normalize(b), "Invalid Money")
+	if #a ~= #b then
+		return #a < #b and -1 or 1
+	end
+	if a == b then
+		return 0
+	end
+	return a < b and -1 or 1
+end
+function Money.Clamp(value)
+	local normalized = Money.Normalize(value)
+	if not normalized then
+		return nil
+	end
+	return Money.Compare(normalized, Money.MAX) > 0 and Money.MAX or normalized
+end
+function Money.Add(a, b)
+	a = assert(Money.Normalize(a))
+	b = assert(Money.Normalize(b))
+	local digits, carry = {}, 0
+	for i = 1, math.max(#a, #b) do
+		local ai, bi = #a - i + 1, #b - i + 1
+		local x = ai > 0 and tonumber(a:sub(ai, ai)) or 0
+		local y = bi > 0 and tonumber(b:sub(bi, bi)) or 0
+		local v = x + y + carry
+		table.insert(digits, tostring(v % 10))
+		carry = math.floor(v / 10)
+	end
+	if carry > 0 then
+		table.insert(digits, tostring(carry))
+	end
+	local out = {}
+	for i = #digits, 1, -1 do
+		table.insert(out, digits[i])
+	end
+	local sum = table.concat(out)
+	if #sum > #Money.MAX then
+		return Money.MAX
+	end
+	return Money.Clamp(sum)
+end
+function Money.Subtract(a, b)
+	a = assert(Money.Normalize(a))
+	b = assert(Money.Normalize(b))
+	if Money.Compare(a, b) < 0 then
+		return nil
+	end
+	local digits, borrow = {}, 0
+	for i = 1, #a do
+		local ai, bi = #a - i + 1, #b - i + 1
+		local x = tonumber(a:sub(ai, ai))
+		local y = bi > 0 and tonumber(b:sub(bi, bi)) or 0
+		local v = x - y - borrow
+		borrow = v < 0 and 1 or 0
+		if v < 0 then
+			v += 10
+		end
+		table.insert(digits, tostring(v))
+	end
+	local out = {}
+	for i = #digits, 1, -1 do
+		table.insert(out, digits[i])
+	end
+	return Money.Normalize(table.concat(out))
+end
+function Money.Format(value)
+	local s = Money.Normalize(value) or "0"
+	if #s < 4 then
+		return s
+	end
+	local units = { "", "K", "M", "B", "T", "Qa", "Qi" }
+	local group = math.min(math.floor((#s - 1) / 3), #units - 1)
+	local leading = #s - group * 3
+	return s:sub(1, leading) .. "." .. s:sub(leading + 1, leading + 1) .. units[group + 1]
+end
+return table.freeze(Money)
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="3">
+      <Properties>
+        <string name="Name">PetAnimator</string>
+        <string name="Source"><![CDATA[-- Client-side procedural animation for every rigged pet and future template clones.
+-- Logical Root movement belongs to the pet / follow system; articulation stays local.
+local RunService = game:GetService("RunService")
+local CollectionService = game:GetService("CollectionService")
+local PetAnimator = {}
+PetAnimator.__index = PetAnimator
+local Config = require(script.Parent.Config)
+local TAU = math.pi * 2
+local CF, V = CFrame.new, Vector3.new
+local hovering = {
+	Bird = true,
+	Insect = true,
+	Fairy = true,
+	Float = true,
+	SkySerpent = true,
+	Octopus = true,
+	Jellyfish = true,
+	Swim = true,
+	Bat = true,
+	Dragon = true,
+	WingedQuad = true,
+}
+local function ease(t)
+	return t * t * (3 - 2 * t)
+end
+local function hash(text)
+	local h = 0
+	for i = 1, #text do
+		h = (h * 31 + string.byte(text, i)) % 100003
+	end
+	return h / 100003
+end
+local function showcase(t, kind)
+	if hovering[kind] then
+		return "Idle", 0, 0, 0
+	end
+	local cycle = t % 17
+	if cycle < 9 then
+		return "Idle", 0, 0, 0
+	end
+	if cycle < 12 then
+		return "Walk", -1.15 * ease((cycle - 9) / 3), 0, 0.65
+	end
+	if cycle < 13 then
+		return "Idle", -1.15, math.pi * ease(cycle - 12), 0
+	end
+	if cycle < 16 then
+		return "Walk", -1.15 * (1 - ease((cycle - 13) / 3)), math.pi, 0.65
+	end
+	return "Idle", 0, math.pi * (1 - ease(cycle - 16)), 0
+end
+
+-- Signature moves: every kind (and a few species) plays its own little trick every so often.
+-- mode: "fly" needs the pet to be airborne, "idle" needs it standing still, "any" has no condition.
+local ACTIONS = {
+	Bird = { { "Barrel", 1.3, "fly" }, { "Loop", 1.9, "fly" }, { "Preen", 2.2, "idle" } },
+	Insect = { { "Loop", 1.0, "fly" }, { "Zip", 0.9, "fly" } },
+	Fairy = { { "Twirl", 1.5, "fly" }, { "Loop", 1.4, "fly" } },
+	Bat = { { "Barrel", 1.1, "fly" }, { "Loop", 1.4, "fly" }, { "Dive", 1.3, "fly" } },
+	Dragon = { { "Backflip", 2.0, "fly" }, { "WingSpin", 2.3, "fly" }, { "Roar", 1.7, "any" } },
+	WingedQuad = { { "Backflip", 1.9, "fly" }, { "Loop", 2.2, "fly" }, { "Stretch", 2.2, "idle" } },
+	SkySerpent = { { "Ring", 5.0, "any" }, { "Coil", 2.8, "any" }, { "Ring", 6.5, "any" } },
+	Slither = { { "Coil", 2.6, "idle" }, { "Stretch", 2.2, "idle" } },
+	Float = { { "Twirl", 1.7, "any" }, { "Bob", 2.2, "any" } },
+	Octopus = { { "Spin", 2.2, "any" }, { "Pulse", 2.0, "any" } },
+	Jellyfish = { { "Pulse", 2.0, "any" } },
+	Swim = { { "Flip", 2.8, "any" }, { "Spout", 2.0, "any" } },
+	Seal = { { "Clap", 1.8, "idle" }, { "Roll", 1.6, "idle" } },
+	Quad = { { "Stretch", 2.2, "idle" }, { "Shake", 1.2, "idle" }, { "Jump", 1.0, "idle" } },
+	Hop = { { "Binky", 1.3, "idle" } },
+	Turtle = { { "Stretch", 2.4, "idle" }, { "Spin", 3.0, "idle" } },
+	Crab = { { "Wave", 2.0, "idle" }, { "Scuttle", 1.6, "idle" } },
+	Lizard = { { "Pushup", 2.0, "idle" }, { "TailWhip", 1.3, "idle" } },
+	Crawl = { { "Stretch", 2.6, "idle" } },
+	Biped = { { "Wave", 2.0, "idle" }, { "Jump", 1.0, "idle" } },
+}
+local ACTION_MOD = {}
+local function applyAction(M, name, u, e, s)
+	if name == "Barrel" then
+		M.roll = TAU * e
+		M.wing = 1.7
+		M.wingHz = 1.5
+		M.spine = 1.8
+	elseif name == "Loop" or name == "Backflip" then
+		M.pitch = TAU * e
+		M.lift = 1.3 * s
+		M.wing = 1.7
+		M.wingHz = 1.5
+		M.spine = 1.5
+	elseif name == "Spin" or name == "Twirl" then
+		M.yaw = TAU * e
+		M.lift = 0.35 * s
+		M.wing = 1.5
+		M.tent = 2
+		M.spine = 1.4
+	elseif name == "WingSpin" then
+		M.yaw = TAU * e
+		M.lift = 0.7 * s
+		M.wing = 1.8
+		M.wingHz = 1.9
+	elseif name == "Roar" then
+		M.headP = -0.45 * s
+		M.pitch = 0.22 * s
+		M.wing = 1.9
+		M.wingHz = 1.5
+		M.lift = 0.25 * s
+	elseif name == "Dive" then
+		M.pitch = 0.9 * s
+		M.lift = -0.5 * s
+		M.wing = 0.5
+	elseif name == "Zip" then
+		M.yaw = TAU * e * 2
+		M.lift = 0.2 * s
+		M.wing = 1.3
+	elseif name == "Preen" then
+		M.headP = 0.55 * s
+		M.headY = 0.8 * math.sin(u * TAU * 1.5) * s
+	elseif name == "HeadSpin" then
+		M.headY = 1.7 * math.sin(u * TAU) * s
+		M.headP = 0.1 * s
+	elseif name == "Coil" then
+		M.spine = 2.6
+		M.roll = 0.35 * math.sin(u * TAU) * s
+	elseif name == "Stretch" then
+		M.headP = 0.5 * s
+		M.pitch = -0.14 * s
+		M.tail = 1.8
+	elseif name == "Shake" then
+		M.yaw = 0.38 * math.sin(u * TAU * 5) * (1 - u)
+		M.roll = 0.1 * math.sin(u * TAU * 5) * (1 - u)
+	elseif name == "Jump" then
+		M.lift = 0.8 * s
+	elseif name == "Binky" then
+		M.lift = 1.1 * s
+		M.yaw = TAU * e
+		M.roll = 0.25 * math.sin(u * TAU * 2) * s
+	elseif name == "Wave" then
+		M.arm = 0.9 * s * (1 + 0.3 * math.sin(u * TAU * 4))
+	elseif name == "Pushup" then
+		M.lift = 0.14 * math.sin(u * TAU * 3) * s
+		M.headP = 0.2 * s
+	elseif name == "TailWhip" then
+		M.tail = 3.2
+		M.yaw = 0.15 * math.sin(u * TAU * 3) * s
+	elseif name == "Clap" then
+		M.fin = 4
+		M.headP = -0.2 * s
+	elseif name == "Flip" then
+		M.pitch = -TAU * e
+		M.lift = 0.9 * s
+		M.fin = 2
+	elseif name == "Roll" then
+		M.roll = TAU * e
+	elseif name == "Pulse" then
+		M.lift = 0.35 * math.sin(u * TAU * 2) * s
+		M.tent = 2.4
+	elseif name == "Scuttle" then
+		M.yaw = 0.5 * math.sin(u * TAU * 4) * s
+		M.arm = 0.4 * s
+	elseif name == "Spout" then
+		M.headP = -0.4 * s
+		M.lift = 0.4 * s
+		M.fin = 1.6
+	elseif name == "Bob" then
+		M.lift = 0.45 * s
+	elseif name == "TailFan" then
+		M.tail = 2.8
+		M.headP = -0.18 * s
+		M.lift = 0.25 * s
+		M.yaw = 0.12 * math.sin(u * TAU * 2) * s
+	elseif name == "Ascend" then
+		-- An optional rising action; no game assets or effects are required.
+		local up = u < 0.28 and ease(u / 0.28) or (u > 0.8 and ease((1 - u) / 0.2) or 1)
+		local crouch = u < 0.1 and math.sin(u / 0.1 * math.pi) * 0.25 or 0
+		M.lift = 3.2 * up - crouch + 0.22 * math.sin(u * TAU * 2.5) * up
+		M.wing = 10
+		M.wingHz = 0.6
+		M.tail = 2.6
+		M.pitch = 0.42 * up
+		M.headP = -0.35 * up
+		M.paw = (2.3 + 0.18 * math.sin(u * TAU * 3)) * up
+		M.yaw = TAU * ease(math.clamp((u - 0.3) / 0.45, 0, 1))
+		M.vis = u < 0.12 and ease(u / 0.12) or (u > 0.88 and ease((1 - u) / 0.12) or 1)
+	elseif name == "Ring" then
+		local k = u < 0.25 and ease(u / 0.25) or (u > 0.75 and ease((1 - u) / 0.25) or 1)
+		M.curl = k * 2.4 / math.max(M.n or 12, 1)
+		M.spin = -TAU * 1.5 * ease(u)
+		M.spine = 0.3
+		M.lift = 0.25 * k
+	end
+end
+
+-- Client skinning: welded / motored pet parts made the physics solver re-solve every assembly each
+-- frame (5-6k parts for a full plot). On the client every pet part is anchored instead and placed
+-- with one BulkMoveTo per pose: bone = parent bone * Motor.C0 * Motor.C1^-1, part = bone * rest offset.
+local function buildSkin(rig)
+	local model, root = rig.Model, rig.Root
+	local bones = { [root] = true }
+	for _, j in ipairs(rig.Joints) do
+		bones[j.Motor.Part1] = true
+	end
+	local parent0 = {}
+	for _, d in ipairs(model:GetDescendants()) do
+		if
+			(d:IsA("WeldConstraint") or (d:IsA("JointInstance") and not d:IsA("Motor6D")))
+			and d.Part0
+			and d.Part1
+		then
+			if not bones[d.Part1] then
+				parent0[d.Part1] = parent0[d.Part1] or d.Part0
+			end
+		end
+	end
+	local parts, owners, offsets = {}, {}, {}
+	for p, _ in pairs(parent0) do
+		if p:IsDescendantOf(model) and p ~= root then
+			local o = parent0[p]
+			local guard = 0
+			while o and not bones[o] and guard < 8 do
+				o = parent0[o]
+				guard += 1
+			end
+			if o and bones[o] then
+				table.insert(parts, p)
+				table.insert(owners, o)
+				table.insert(offsets, o.CFrame:ToObjectSpace(p.CFrame))
+			end
+		end
+	end
+	if #parts == 0 then
+		return nil
+	end
+	-- switch the client copy to anchored, joint-free geometry
+	for _, d in ipairs(model:GetDescendants()) do
+		if
+			(d:IsA("WeldConstraint") or d:IsA("JointInstance"))
+			and d.Part1 ~= nil
+			and (bones[d.Part1] or parent0[d.Part1])
+		then
+			d.Enabled = false
+		end
+	end
+	for _, p in ipairs(parts) do
+		p.Anchored = true
+	end
+	for _, j in ipairs(rig.Joints) do
+		if j.Motor.Part1 then
+			j.Motor.Part1.Anchored = true
+		end
+	end
+	local list, cfs = {}, {}
+	for _, j in ipairs(rig.Joints) do
+		if j.Motor.Part1 then
+			table.insert(list, j.Motor.Part1)
+		end
+	end
+	for _, p in ipairs(parts) do
+		table.insert(list, p)
+	end
+	return { Parts = parts, Owners = owners, Offsets = offsets, List = list, CFs = cfs, BoneCF = {} }
+end
+local function applySkin(rig)
+	local S = rig.Skin
+	if not S then
+		return
+	end
+	local rootCF = rig.Root.CFrame
+	local boneCF = S.BoneCF
+	boneCF[rig.Root] = rootCF
+	local cfs = S.CFs
+	local n = 0
+	for _, j in ipairs(rig.Joints) do
+		local m = j.Motor
+		if m.Part1 then
+			local p0 = boneCF[m.Part0] or (m.Part0 and m.Part0.CFrame) or rootCF
+			local cf = p0 * m.C0 * j.InverseC1
+			boneCF[m.Part1] = cf
+			n += 1
+			cfs[n] = cf
+		end
+	end
+	for i, p in ipairs(S.Parts) do
+		n += 1
+		cfs[n] = (boneCF[S.Owners[i]] or rootCF) * S.Offsets[i]
+	end
+	for i = n + 1, #cfs do
+		cfs[i] = nil
+	end
+	rig.WorldRoot:BulkMoveTo(S.List, cfs, Enum.BulkMoveMode.FireCFrameChanged)
+	rig.SkinRoot = rootCF
+end
+
+function PetAnimator.new(options)
+	options = options or {}
+	return setmetatable({
+		Rigs = {},
+		Connections = {},
+		Elapsed = 0,
+		Started = false,
+		Tag = options.Tag or Config.PetTag,
+		ActionsByName = options.ActionsByName or {},
+		ClientSkinning = options.ClientSkinning ~= false,
+		WorldRoot = options.WorldRoot or workspace,
+	}, PetAnimator)
+end
+
+function PetAnimator:Attach(model)
+	-- PetViewport: a pet shown inside a ViewportFrame WorldModel (hatch presentation UI)
+	if
+		self.Rigs[model]
+		or not model:IsA("Model")
+		or not (model:IsDescendantOf(self.WorldRoot) or model:GetAttribute("PetViewport"))
+	then
+		return
+	end
+	local root = model.PrimaryPart
+	local folder = model:FindFirstChild("AnimationRig")
+	if not root or not folder or model:GetAttribute("PetRigVersion") ~= 1 then
+		return
+	end
+	local seed = hash((model:GetAttribute("Zone") or "") .. model.Name)
+	local rig = {
+		Model = model,
+		Root = root,
+		WorldRoot = self.WorldRoot,
+		Kind = model:GetAttribute("PetMotionKind") or "Quad",
+		Joints = {},
+		Eyes = {},
+		Shines = {},
+		Seed = seed,
+		Phase = seed * TAU,
+		Scale = model:GetScale(),
+		LastPosition = root.Position,
+		LastTime = workspace:GetServerTimeNow(),
+		Bounds = {},
+		Predicted = {},
+		Speed = 0,
+		Move = 0,
+		FlyBlend = 0,
+		GaitPhase = seed * TAU,
+		Accumulator = 0,
+		PoseCount = 0,
+		LastState = "Idle",
+		Enabled = true,
+		Profile = model:GetAttribute("PetMotionProfile"),
+		NextAt = workspace:GetServerTimeNow() + 3 + seed * 9,
+		Rng = Random.new(math.floor(seed * 1000003)),
+		WingPhase = 0,
+	}
+	for _, joint in ipairs(folder:GetChildren()) do
+		if joint:IsA("Motor6D") then
+			rig.Joints[#rig.Joints + 1] = {
+				Motor = joint,
+				Base = joint.C0,
+				InverseC1 = joint.C1:Inverse(),
+				Role = joint:GetAttribute("Role"),
+				Side = joint:GetAttribute("Side") or 0,
+				Index = joint:GetAttribute("Index") or 1,
+				Phase = joint:GetAttribute("Phase") or 0,
+				Front = joint:GetAttribute("Front") == true,
+				Chain = joint:GetAttribute("Chain"),
+				ChainYaw = joint:GetAttribute("ChainYaw") or 0.05,
+				ChainPitch = joint:GetAttribute("ChainPitch") or 0.02,
+				ChainStraight = joint:GetAttribute("ChainStraight") or 0,
+			}
+		end
+	end
+	for _, p in ipairs(model:GetDescendants()) do
+		if p:IsA("BasePart") then
+			if (p.Name == "Eye" or p.Name == "Pupil") and p.Size.Y > 0.14 then
+				rig.Eyes[#rig.Eyes + 1] = { Part = p, Size = p.Size }
+			end
+			if p.Name == "EyeShine" then
+				rig.Shines[#rig.Shines + 1] = { Part = p, Transparency = p.Transparency }
+			end
+		end
+	end
+	if #rig.Joints == 0 or #rig.Joints ~= (model:GetAttribute("PetJointCount") or 0) then
+		return
+	end
+	-- Capture client changes so Stop / Detach can restore the model at its current root position.
+	rig.RestoreParts = {}
+	rig.RestoreEnabled = {}
+	for _, item in ipairs(model:GetDescendants()) do
+		if item:IsA("BasePart") and item ~= root then
+			table.insert(rig.RestoreParts, {
+				Part = item,
+				Anchored = item.Anchored,
+				Relative = root.CFrame:ToObjectSpace(item.CFrame),
+			})
+		elseif item:IsA("JointInstance") or item:IsA("WeldConstraint") then
+			table.insert(rig.RestoreEnabled, { Item = item, Enabled = item.Enabled })
+		end
+	end
+	local owners = {}
+	for _, j in ipairs(rig.Joints) do
+		owners[j.Motor.Part1] = j
+	end
+	local visiting = {}
+	local function depth(j)
+		assert(not visiting[j], "Cycle in pet joint hierarchy")
+		if j.Depth then
+			return j.Depth
+		end
+		visiting[j] = true
+		local parent = owners[j.Motor.Part0]
+		j.Depth = parent and depth(parent) + 1 or 1
+		visiting[j] = nil
+		return j.Depth
+	end
+	for _, j in ipairs(rig.Joints) do
+		depth(j)
+	end
+	table.sort(rig.Joints, function(a, b)
+		return a.Depth < b.Depth
+	end)
+	local restMin = (model:GetAttribute("PetRestMinY") or -0.5) * rig.Scale
+	for _, p in ipairs(model:GetDescendants()) do
+		if p:IsA("BasePart") and p ~= root then
+			local relative = root.CFrame:ToObjectSpace(p.CFrame)
+			local half = p.Size / 2
+			local extent = math.abs(relative.RightVector.Y) * half.X
+				+ math.abs(relative.UpVector.Y) * half.Y
+				+ math.abs(relative.LookVector.Y) * half.Z
+			-- Only geometry close enough to touch the floor needs bounds every frame.
+			if relative.Position.Y - extent <= restMin + 0.7 * rig.Scale then
+				local weld = p:FindFirstChild("ArtWeld")
+				local owner = owners[p] and p or weld and weld.Part0 or root
+				rig.Bounds[#rig.Bounds + 1] = {
+					Owner = owner,
+					Relative = owner.CFrame:ToObjectSpace(p.CFrame),
+					Half = half,
+					Low = relative.Position.Y - extent,
+				}
+			end
+		end
+	end
+	-- only the lowest pieces can touch the floor: keep the 24 lowest (big pets had hundreds)
+	if #rig.Bounds > 24 then
+		table.sort(rig.Bounds, function(a, b)
+			return a.Low < b.Low
+		end)
+		for i = #rig.Bounds, 25, -1 do
+			rig.Bounds[i] = nil
+		end
+	end
+	-- client skinning (viewport pets are placed by their own presentation code)
+	if self.ClientSkinning and not model:GetAttribute("PetViewport") then
+		local ok, skin = pcall(buildSkin, rig)
+		if ok and skin then
+			rig.Skin = skin
+			applySkin(rig)
+		end
+	end
+	-- emitters / trails / lights of the pet, switched off when far away or off screen
+	rig.Fx = {}
+	for _, d in ipairs(model:GetDescendants()) do
+		if
+			(d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Beam") or d:IsA("Light"))
+			and d.Enabled
+		then
+			table.insert(rig.Fx, d)
+		end
+	end
+	rig.FxOn = true
+	self.Rigs[model] = rig
+	return rig
+end
+
+function PetAnimator:Detach(model, restore)
+	local rig = self.Rigs[model]
+	if not rig then
+		return
+	end
+	if restore ~= false then
+		for _, joint in ipairs(rig.Joints) do
+			if joint.Motor.Parent then
+				joint.Motor.C0 = joint.Base
+			end
+		end
+		for _, eye in ipairs(rig.Eyes) do
+			if eye.Part.Parent then
+				eye.Part.Size = eye.Size
+			end
+		end
+		for _, shine in ipairs(rig.Shines) do
+			if shine.Part.Parent then
+				shine.Part.Transparency = shine.Transparency
+			end
+		end
+	end
+	if restore ~= false then
+		for _, entry in ipairs(rig.RestoreParts) do
+			if entry.Part.Parent then
+				entry.Part.CFrame = rig.Root.CFrame * entry.Relative
+				entry.Part.Anchored = entry.Anchored
+			end
+		end
+		for _, entry in ipairs(rig.RestoreEnabled) do
+			if entry.Item.Parent then
+				entry.Item.Enabled = entry.Enabled
+			end
+		end
+		for _, fx in ipairs(rig.Fx) do
+			if fx.Parent then
+				fx.Enabled = true
+			end
+		end
+	end
+	self.Rigs[model] = nil
+end
+
+function PetAnimator:SetState(model, state)
+	assert(
+		state == nil or state == "Idle" or state == "Walk" or state == "Fly",
+		"State must be Idle, Walk, Fly, or nil for automatic"
+	)
+	if state == "Fly" and model:GetAttribute("PetCanFly") ~= true then
+		return false
+	end
+	model:SetAttribute("PetAnimationState", state)
+	return true
+end
+
+function PetAnimator:Pose(rig, t, dt, forcedState)
+	dt = math.clamp(dt, 0, 0.15)
+	local model, kind = rig.Model, rig.Kind
+	local now = workspace:GetServerTimeNow()
+	local delta = rig.Root.Position - rig.LastPosition
+	local interval = math.max(now - rig.LastTime, 1 / 240)
+	local speed = V(delta.X, 0, delta.Z).Magnitude / interval
+	-- Teleports should not trigger a huge running stride.
+	if speed > 60 then
+		speed = 0
+	end
+	rig.LastPosition = rig.Root.Position
+	rig.LastTime = now
+	rig.Speed += (speed - rig.Speed) * (1 - math.exp(-dt * 9))
+	local state = forcedState or model:GetAttribute("PetAnimationState")
+	local offsetZ, yaw, demoSpeed = 0, 0, 0
+	if not state then
+		if
+			model:GetAttribute("PetShowcase") == true
+			and model:GetAttribute("PetShowcaseDemo") ~= false
+		then
+			state, offsetZ, yaw, demoSpeed = showcase(t + rig.Seed * 17, kind)
+		else
+			state = rig.Speed > 0.18 and (model:GetAttribute("PetCanFly") and "Fly" or "Walk")
+				or "Idle"
+		end
+	end
+	if state ~= "Idle" and state ~= "Walk" and state ~= "Fly" then
+		state = "Idle"
+	end
+	local flying = model:GetAttribute("PetCanFly") == true
+		and state ~= "Walk"
+		and model:GetAttribute("PetGrounded") ~= true
+	if state == "Fly" and model:GetAttribute("PetCanFly") == true then
+		flying = true
+	end
+	local moving = (state == "Walk" or state == "Fly") and 1 or 0
+	local blend = 1 - math.exp(-math.max(dt, 0.001) * 10)
+	rig.Move += (moving - rig.Move) * blend
+	rig.FlyBlend += ((flying and 1 or 0) - rig.FlyBlend) * blend
+	local move, flight, phase = rig.Move, rig.FlyBlend, rig.Phase
+	local animationSpeed = math.max(rig.Speed, demoSpeed)
+	local customProfile = rig.Profile ~= nil
+	local capy = rig.Profile == "Heavy"
+	local kirin = rig.Profile == "Graceful"
+	local mini = rig.Profile == "Coiled"
+	local phoenix = rig.Profile == "SlowWings"
+	local sit = capy and (1 - rig.Move) * (0.5 + 0.5 * math.sin(t * 0.22 + phase)) ^ 4 or 0
+	local curl = mini and (1 - rig.Move) * math.max(0, math.sin(t * 0.32 + phase)) ^ 4 or 0
+	local gaitHz = capy and 1.15
+		or kirin and 1.4
+		or kind == "Turtle" and 1.05
+		or kind == "Crawl" and 0.7
+		or math.clamp(1.65 + animationSpeed * 0.12, 1.65, 3.5)
+	rig.GaitPhase = (rig.GaitPhase + math.max(dt, 0) * TAU * gaitHz) % TAU
+	local gait = rig.GaitPhase
+	local slow = t * 1.8 + phase
+	local hover = t * TAU * 0.65 + phase
+	local scale = rig.Scale
+	local lift = (model:GetAttribute("PetHoverLift") or 0) * flight * scale
+	local groundCorrection = math.max(0, -0.45 - (model:GetAttribute("PetRestMinY") or -0.5))
+		* (1 - flight)
+		* scale
+	local breathing = 0.025 * math.sin(slow) * scale
+	local hop = (kind == "Hop") and math.max(0, math.sin(gait)) * 0.22 * move * scale or 0
+	local bounce = (kind == "Turtle" or kind == "Crawl") and 0.015 * move * scale
+		or 0.045 * math.abs(math.sin(gait)) * move * scale
+	local bob = 0.12 * math.sin(hover) * flight * scale
+	local bodyY = lift + groundCorrection + breathing + hop + bounce + bob - sit * 0.22 * scale
+	if capy then
+		bodyY += 0.035 * math.abs(math.sin(gait)) * move * scale
+	end
+	local driftX = 0.075 * math.sin(hover * 0.7) * flight * scale
+	local driftZ = 0.08 * math.cos(hover * 0.8) * flight * scale + offsetZ * scale
+	local pitch = -0.075 * move * flight + 0.016 * math.sin(slow * 0.8)
+	local roll = 0.018 * math.sin(gait) * move * (1 - flight)
+		+ 0.032 * math.sin(hover * 0.72) * flight
+	if kind == "Seal" then
+		pitch += 0.085 * math.sin(gait) * move
+		bodyY += 0.045 * math.abs(math.sin(gait)) * move * scale
+	end
+	if kind == "Jellyfish" then
+		bodyY += 0.1 * math.sin(hover * 1.5) * scale
+	end
+	local wingHz = phoenix and 0.8
+		or kind == "Insect" and 7.5
+		or kind == "Fairy" and 3.8
+		or kind == "Dragon" and 1.15
+		or kind == "Bat" and 3.4
+		or 2.2
+	if kind == "SkySerpent" and not rig.RingR then
+		local chain = {}
+		for _, j in ipairs(rig.Joints) do
+			if j.Role == "Body" or j.Role == "Spine" then
+				chain[#chain + 1] = j
+			end
+		end
+		table.sort(chain, function(a, b)
+			return (a.Index or 1) < (b.Index or 1)
+		end)
+		local len = 0
+		for i = 2, #chain do
+			len += (chain[i].Motor.Part1.Position - chain[i - 1].Motor.Part1.Position).Magnitude
+		end
+		rig.RingR = len / 2.4
+		rig.NSpine = math.max(#chain - 1, 1)
+	end
+	local act = rig.Action
+	if act and t >= act.Start + act.Dur then
+		rig.Action = nil
+		act = nil
+	end
+	-- Optional motion profiles and viewport pets stay calm.
+	local signature = not (customProfile or model:GetAttribute("PetViewport"))
+	if signature and not act and t >= rig.NextAt then
+		local list = self.ActionsByName[model:GetAttribute("DisplayName") or model.Name]
+			or ACTIONS[kind]
+		local choices = {}
+		if list then
+			for _, a in ipairs(list) do
+				if
+					(a[3] == "fly" and flight > 0.6)
+					or (a[3] == "idle" and move < 0.25 and flight < 0.5)
+					or a[3] == "any"
+				then
+					choices[#choices + 1] = a
+				end
+			end
+		end
+		if #choices > 0 then
+			local a = choices[rig.Rng:NextInteger(1, #choices)]
+			act = { Name = a[1], Dur = a[2], Start = t }
+			rig.Action = act
+			rig.NextAt = t + a[2] + 5 + rig.Rng:NextNumber() * 9
+		else
+			rig.NextAt = t + 2
+		end
+	end
+	local aRoll, aPitch, aYaw, aLift, aHeadP, aHeadY, aWing, aWingHz, aTail, aArm, aTent, aFin, aSpine, aCurl, aSpin =
+		0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0
+	if act then
+		local u = math.clamp((t - act.Start) / act.Dur, 0, 1)
+		local M = ACTION_MOD
+		M.roll, M.pitch, M.yaw, M.lift, M.headP, M.headY, M.wing, M.wingHz, M.tail, M.arm, M.tent, M.fin, M.spine, M.curl, M.spin =
+			0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0
+		M.n = rig.NSpine
+		M.vis = 0
+		M.paw = 0
+		applyAction(M, act.Name, u, ease(u), math.sin(u * math.pi))
+		aRoll, aPitch, aYaw, aLift, aHeadP, aHeadY, aWing, aWingHz, aTail, aArm, aTent, aFin, aSpine, aCurl, aSpin =
+			M.roll,
+			M.pitch,
+			M.yaw,
+			M.lift,
+			M.headP,
+			M.headY,
+			M.wing,
+			M.wingHz,
+			M.tail,
+			M.arm,
+			M.tent,
+			M.fin,
+			M.spine,
+			M.curl,
+			M.spin
+	end
+	local aPaw = act and ACTION_MOD.paw or 0
+	rig.WingPhase = (rig.WingPhase + math.max(dt, 0) * TAU * wingHz * aWingHz) % TAU
+	local wingTime = rig.WingPhase + phase
+	-- every pet: turn rate (for lean / tail lag) and where the head looks (toward the wander target)
+	local TS = rig.TurnState or { Look = 0, YawRate = 0 }
+	rig.TurnState = TS
+	do
+		local lv = rig.Root.CFrame.LookVector
+		local ry = math.atan2(-lv.X, -lv.Z)
+		local yr = TS.LastYaw
+				and ((ry - TS.LastYaw + math.pi) % TAU - math.pi) / math.max(dt, 1 / 240)
+			or 0
+		TS.LastYaw = ry
+		TS.YawRate += (math.clamp(yr, -4, 4) - TS.YawRate) * math.min(1, dt * 3)
+		local want = 0
+		local goal = model:GetAttribute("PetWanderTarget")
+		if typeof(goal) == "Vector3" and state ~= "Idle" then
+			local rel = rig.Root.CFrame:PointToObjectSpace(goal)
+			if V(rel.X, 0, rel.Z).Magnitude > 0.5 * scale then
+				want = math.clamp(math.atan2(-rel.X, -rel.Z), -0.6, 0.6)
+			end
+		end
+		TS.Look += (math.clamp(want + TS.YawRate * 0.18, -0.7, 0.7) - TS.Look) * math.min(1, dt * 3)
+	end
+	-- Motion profiles keep their own gait blend.
+	local gen = customProfile and 0 or 1
+	local turn = TS.YawRate * gen
+	local lookT = TS.Look * gen
+	-- lean into turns, lean slightly forward while walking, slow weight shift while standing
+	roll += math.clamp(-turn * 0.07, -0.12, 0.12) * move * (1 - flight)
+	pitch += -0.03 * move * (1 - flight) * gen
+	roll += 0.012 * math.sin(t * 0.45 + phase) * (1 - move) * (1 - flight) * gen
+	for _, j in ipairs(rig.Joints) do
+		local pose = CFrame.identity
+		local role, side, index = j.Role, j.Side, j.Index
+		if role == "Body" then
+			local ringC = V((rig.RingR or 0) * math.min(aCurl * (rig.NSpine or 12) / 2.4, 1), 0, 0)
+			pose = CF(driftX, bodyY + aLift * scale, driftZ)
+				* CF(ringC)
+				* CFrame.Angles(
+					pitch + sit * 0.05 + aPitch,
+					yaw + curl * 0.35 + aYaw + aSpin,
+					roll + (capy and 0.035 * math.sin(gait) * move or 0) + aRoll
+				)
+				* CF(-ringC)
+		elseif role == "Head" then
+			local look = 0.065 * math.sin(t * 0.6 + phase) + 0.026 * math.sin(t * 0.23 + phase)
+			pose = CFrame.Angles(
+				0.028 * math.sin(slow * 0.85) - 0.035 * move + aHeadP,
+				look * (1 - 0.5 * math.abs(lookT)) + lookT * 0.65 + aHeadY,
+				0.014 * math.sin(slow * 0.6) - lookT * 0.08
+			)
+			if kind == "Crawl" then
+				pose = CF(0, 0, -0.055 * math.sin(gait) * move * scale) * pose
+			end
+		elseif role == "Leg" or role == "HindLeg" then
+			local step = math.sin(gait + j.Phase)
+			local stride = (kind == "Turtle" and 0.24 or kind == "Lizard" and 0.28 or 0.46)
+				* (customProfile and 1 or (0.8 + 0.35 * math.clamp(rig.Speed / (3 * scale), 0, 1)))
+			local angle = step * stride * move * (1 - flight)
+			if j.Front and aPaw ~= 0 then
+				angle += aPaw
+			end
+			local raise = math.max(0, math.cos(gait + j.Phase))
+				* 0.055
+				* move
+				* (1 - flight)
+				* scale
+			if kind == "Hop" then
+				angle = math.sin(gait + ((role == "HindLeg" or not j.Front) and math.pi or 0))
+					* 0.42
+					* move
+					* (1 - flight)
+			end
+			if kind == "Crab" then
+				pose = CF(0, raise, 0)
+					* CFrame.Angles(0, step * 0.20 * move, side * step * 0.14 * move)
+			else
+				pose = CF(0, raise, 0)
+					* CFrame.Angles(angle + flight * 0.18 + sit * 0.65, 0, side * 0.03 * flight)
+			end
+		elseif role == "Arm" then
+			local swing = -math.sin(gait + j.Phase) * 0.3 * move * (1 - flight)
+			pose = CFrame.Angles(
+				swing + 0.05 * math.sin(slow + j.Phase) - aArm,
+				0,
+				side * (0.035 * math.sin(slow * 0.8) + flight * 0.06 + aArm * 0.6)
+			)
+			if kind == "Crab" then
+				pose = CFrame.Angles(
+					0.08 * math.sin(slow + j.Phase) - aArm * 0.7,
+					side * 0.12 * math.sin(slow * 0.65 + j.Phase),
+					side * aArm * 0.5
+				)
+			end
+		elseif role == "Wing" then
+			local strength = math.min((0.12 + 0.88 * flight) * aWing, 1.7)
+			local wave = math.sin(wingTime + j.Phase)
+			if kind == "Insect" then
+				pose =
+					CFrame.Angles(0, side * wave * 0.65 * strength, side * wave * 0.12 * strength)
+			elseif kind ~= "Fairy" then
+				-- Real wing beat: wings rest raised and folded back on the ground; in flight a slow powerful
+				-- downstroke sweeps forward with the leading edge tipped down, the upstroke folds back.
+				local w = wingTime + j.Phase
+				local beat = math.sin(w) + 0.22 * math.sin(2 * w)
+				local fold = 1 - flight
+				local amp = (kind == "Dragon" or kind == "Bat") and 0.42 or 0.5
+				local flap = side
+					* ((0.22 + 0.08 * fold) + beat * amp * strength * (0.25 + 0.75 * flight))
+				local sweep = side * (-0.32 * fold - 0.16 * math.cos(w) * strength * flight)
+				local twist = (0.1 * math.cos(w) * strength - 0.06) * flight
+					+ 0.05 * fold * math.sin(slow * 0.7)
+				pose = CFrame.Angles(twist, sweep, flap)
+			else
+				pose = CFrame.Angles(
+					0.07 * math.sin(wingTime + j.Phase + 0.4) * strength,
+					side * 0.035 * math.cos(wingTime),
+					side * wave * 0.62 * strength
+				)
+			end
+		elseif role == "Tail" then
+			local wave = math.sin(t * 2.7 + phase - j.Phase)
+			if kind == "Swim" or kind == "Seal" then
+				pose =
+					CFrame.Angles(wave * (0.11 + 0.12 * move), 0.07 * math.sin(slow - j.Phase), 0)
+			else
+				pose = CFrame.Angles(
+					0.035 * math.sin(slow + j.Phase) - 0.08 * move * gen,
+					wave * (0.07 + 0.11 * move) * aTail * (model:GetAttribute("TailSway") or 1)
+						- turn * 0.15,
+					0.025 * math.cos(slow + j.Phase)
+				)
+			end
+		elseif role == "Spine" and j.Chain then
+			-- hand-built chain (cobra coil / neck): a slow travelling wave, livelier while moving
+			local amp = (1 + 0.6 * move) * aSpine
+			local wave = math.sin(t * 1.7 + phase - index * 0.5)
+			local rise = math.cos(t * 1.3 + phase - index * 0.45)
+			pose = CFrame.Angles(
+				j.ChainPitch * rise * amp,
+				j.ChainYaw * wave * amp * (1 - 0.6 * move) + j.ChainStraight * move,
+				j.ChainPitch * 0.5 * wave * amp
+			)
+		elseif role == "Spine" and customProfile then
+			local wave = math.sin(t * (mini and 1.9 or 1.45) + phase - index * 0.7)
+			pose = CFrame.Angles(0, wave * (0.045 + 0.075 * move) + curl * 0.22, 0)
+		elseif role == "Spine" then
+			local sp = kind == "SkySerpent"
+			local wave = math.sin(t * (sp and 1.9 or 3.2) + phase - index * (sp and 0.62 or 0.7))
+			local rise = math.cos(t * 1.4 + phase - index * 0.5)
+			pose = CFrame.Angles(
+				sp and (0.075 + 0.04 * move) * rise * aSpine or 0,
+				wave * ((sp and 0.10 or 0.035) + (sp and 0.09 or 0.10) * move) * aSpine + aCurl,
+				sp and 0.03 * wave * aSpine or 0
+			)
+		elseif role == "Tentacle" then
+			local wave = math.sin(t * 2.25 + phase - j.Phase)
+			pose = CFrame.Angles(
+				wave * (0.12 + 0.09 * move) * aTent,
+				0.07 * math.cos(slow + j.Phase),
+				side * 0.055 * math.sin(slow * 0.9 + j.Phase) * aTent
+			)
+		elseif role == "Fin" then
+			local wave = math.sin(t * 3.0 + phase + j.Phase)
+			pose = CFrame.Angles(
+				wave * (kind == "Seal" and 0.25 * move + 0.05 or 0.18) * aFin,
+				0,
+				side * wave * 0.12 * aFin
+			)
+		elseif role == "Ear" then
+			local window = (t + rig.Seed * 4.7) % 4.7
+			local twitch = window < 0.34 and math.sin(window / 0.34 * TAU) * 0.13 or 0
+			pose = CFrame.Angles(
+				0.024 * math.sin(slow) + 0.08 * move * gen,
+				0,
+				side * (twitch + 0.015 * math.sin(slow * 0.8)) - turn * 0.05
+			)
+		elseif role == "Stalk" then
+			pose = CFrame.Angles(
+				0.05 * math.sin(slow + j.Phase),
+				0,
+				side * 0.06 * math.sin(slow * 0.8)
+			)
+		elseif role == "Wisp" then
+			pose = CF(0, 0.035 * math.sin(slow + j.Phase) * scale, 0)
+				* CFrame.Angles(
+					0.04 * math.sin(slow + j.Phase),
+					0.08 * math.sin(slow * 0.6 + j.Phase),
+					0.04 * math.cos(slow + j.Phase)
+				)
+		end
+		if j.Motor.Parent and j.Motor.Part0 and j.Motor.Part1 then
+			j.Motor.C0 = j.Base * pose
+		end
+	end
+	-- Evaluate the articulated lower geometry before the physics solver runs.
+	-- The Root remains the follow system's anchor; only the visual body rises.
+	if flight < 0.95 and #rig.Bounds > 0 then
+		local predicted = rig.Predicted
+		table.clear(predicted)
+		predicted[rig.Root] = CFrame.identity
+		local bodyJoint
+		for _, j in ipairs(rig.Joints) do
+			local motor = j.Motor
+			predicted[motor.Part1] = (predicted[motor.Part0] or CFrame.identity)
+				* motor.C0
+				* j.InverseC1
+			if j.Role == "Body" then
+				bodyJoint = motor
+			end
+		end
+		local bottom = math.huge
+		for _, bound in ipairs(rig.Bounds) do
+			local cf = (predicted[bound.Owner] or CFrame.identity) * bound.Relative
+			local half = bound.Half
+			local extent = math.abs(cf.RightVector.Y) * half.X
+				+ math.abs(cf.UpVector.Y) * half.Y
+				+ math.abs(cf.LookVector.Y) * half.Z
+			bottom = math.min(bottom, cf.Position.Y - extent)
+		end
+		local clearance = math.max(0, -0.48 * scale - bottom)
+		if bodyJoint and clearance > 0 then
+			bodyJoint.C0 = bodyJoint.C0 + V(0, clearance, 0)
+		end
+	end
+	local blinkCycle = (t + rig.Seed * 5.4) % (3.6 + rig.Seed * 1.8)
+	local blink = blinkCycle < 0.18 and math.sin(blinkCycle / 0.18 * math.pi) ^ 2 or 0
+	for _, eye in ipairs(rig.Eyes) do
+		if eye.Part.Parent then
+			eye.Part.Size = V(eye.Size.X, eye.Size.Y * (1 - 0.93 * blink), eye.Size.Z)
+		end
+	end
+	local closed = blink > 0.65
+	for _, shine in ipairs(rig.Shines) do
+		if shine.Part.Parent then
+			shine.Part.Transparency = closed and 1 or shine.Transparency
+		end
+	end
+	rig.LastState = state
+	rig.PoseCount += 1
+end
+
+function PetAnimator:Step(dt)
+	assert(
+		type(dt) == "number" and dt == dt and dt >= 0 and dt < math.huge,
+		"dt must be finite and non-negative"
+	)
+	local camera = workspace.CurrentCamera
+	local now = workspace:GetServerTimeNow()
+	for model, rig in pairs(self.Rigs) do
+		local viewport = model:GetAttribute("PetViewport") == true
+		if
+			not (model:IsDescendantOf(self.WorldRoot) or (viewport and model:IsDescendantOf(game)))
+			or not rig.Root.Parent
+		then
+			self:Detach(model)
+		elseif model:GetAttribute("PetAnimationEnabled") == false then
+			if rig.Enabled then
+				rig.Enabled = false
+				for _, j in ipairs(rig.Joints) do
+					if j.Motor.Parent then
+						j.Motor.C0 = j.Base
+					end
+				end
+				for _, eye in ipairs(rig.Eyes) do
+					if eye.Part.Parent then
+						eye.Part.Size = eye.Size
+					end
+				end
+				for _, shine in ipairs(rig.Shines) do
+					if shine.Part.Parent then
+						shine.Part.Transparency = shine.Transparency
+					end
+				end
+				applySkin(rig)
+			end
+			if rig.Skin and rig.SkinRoot ~= rig.Root.CFrame then
+				applySkin(rig)
+			end
+			rig.LastPosition = rig.Root.Position
+			rig.LastTime = now
+		else
+			rig.Enabled = true
+			rig.Accumulator += dt
+			local distance = camera and (camera.CFrame.Position - rig.Root.Position).Magnitude or 0
+			-- the pet's real size (a giant can fill the screen while its Root is far away)
+			if not rig.Radius then
+				local ok, s = pcall(function()
+					return model:GetExtentsSize()
+				end)
+				rig.Radius = ok and s.Magnitude / 2 or rig.Scale * 2
+			end
+			local radius = rig.Radius
+			-- off screen (with a margin for big pets) or far away: pose rarely or not at all
+			local onScreen = true
+			if camera and not viewport then
+				local _, vis = camera:WorldToViewportPoint(rig.Root.Position)
+				if not vis then
+					local toPet = rig.Root.Position - camera.CFrame.Position
+					onScreen = toPet.Magnitude < math.max(rig.Scale * 8, radius * 1.6)
+						or camera.CFrame.LookVector:Dot(toPet.Unit) > 0.2
+				end
+			end
+			local interval = viewport and 0
+				or (not onScreen) and (distance - radius < 60 and 1 / 6 or math.huge)
+				or distance < 70 and 1 / 30
+				or distance < 140 and 1 / 20
+				or distance < 260 and 1 / 12
+				or distance < 450 and 1 / 6
+				or math.huge
+			-- big pets on screen: the rate follows how large the pet looks (size / distance), not only the
+			-- distance to its Root, so a giant filling the screen is animated smoothly instead of at 12-20 fps
+			if onScreen and not viewport then
+				local look = radius / math.max(distance, 1)
+				local bySize = look > 0.22 and 0
+					or look > 0.12 and 1 / 40
+					or look > 0.07 and 1 / 30
+					or look > 0.04 and 1 / 20
+					or look > 0.02 and 1 / 12
+					or math.huge
+				interval = math.min(interval, bySize)
+			end
+			-- effects only when it can be seen nearby
+			local fxWant = viewport or (onScreen and distance - radius < 160)
+			if rig.Fx and fxWant ~= rig.FxOn then
+				rig.FxOn = fxWant
+				for _, fx in ipairs(rig.Fx) do
+					if fx.Parent and not fx:GetAttribute("AnimatorManaged") then
+						fx.Enabled = fxWant
+					end
+				end
+			end
+			if rig.Accumulator >= interval then
+				local elapsed = math.min(rig.Accumulator, 0.15)
+				rig.Accumulator = 0
+				self:Pose(rig, now, elapsed)
+				applySkin(rig)
+			elseif rig.Skin and (onScreen or distance < 60) and rig.SkinRoot ~= rig.Root.CFrame then
+				-- not posed this frame but the pet walked: carry the last pose along
+				applySkin(rig)
+			end
+		end
+	end
+end
+
+function PetAnimator:Start()
+	assert(RunService:IsClient(), "PetAnimator:Start() must run from a LocalScript")
+	if self.Started then
+		return
+	end
+	self.Started = true
+	for _, model in ipairs(CollectionService:GetTagged(self.Tag)) do
+		self:Attach(model)
+	end
+	self.Connections[#self.Connections + 1] = CollectionService:GetInstanceAddedSignal(self.Tag)
+		:Connect(function(model)
+			if model:IsDescendantOf(self.WorldRoot) or model:GetAttribute("PetViewport") then
+				task.defer(function()
+					if self.Started then
+						self:Attach(model)
+					end
+				end)
+			end
+		end)
+	self.Connections[#self.Connections + 1] = CollectionService:GetInstanceRemovedSignal(self.Tag)
+		:Connect(function(model)
+			self:Detach(model)
+		end)
+	-- Streaming can place a tagged model in Workspace before its joints arrive.
+	self.Connections[#self.Connections + 1] = self.WorldRoot.DescendantAdded:Connect(function(v)
+		if v:IsA("Motor6D") or v:IsA("Model") then
+			local model = v:IsA("Model") and v or v:FindFirstAncestorOfClass("Model")
+			if model and CollectionService:HasTag(model, self.Tag) and not self.Rigs[model] then
+				task.defer(function()
+					if self.Started then
+						self:Attach(model)
+					end
+				end)
+			end
+		end
+	end)
+	self.Connections[#self.Connections + 1] = RunService.PreSimulation:Connect(function(dt)
+		self:Step(dt)
+	end)
+end
+
+function PetAnimator:Stop()
+	self.Started = false
+	for _, c in ipairs(self.Connections) do
+		c:Disconnect()
+	end
+	table.clear(self.Connections)
+	local models = {}
+	for model in pairs(self.Rigs) do
+		models[#models + 1] = model
+	end
+	for _, model in ipairs(models) do
+		self:Detach(model)
+	end
+end
+
+return PetAnimator
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="4">
+      <Properties>
+        <string name="Name">PetRig</string>
+        <string name="Source"><![CDATA[-- Preserve the block art while replacing rigid root welds with articulated joints.
+local PetRig = {}
+PetRig.Version = 1
+PetRig.Tag = "GameplayToolkitPet"
+local CollectionService = game:GetService("CollectionService")
+local Config = require(script.Parent.Config)
+local V, CF = Vector3.new, CFrame.new
+
+local flying = {
+	Bird = true,
+	Insect = true,
+	Fairy = true,
+	Float = true,
+	SkySerpent = true,
+	Octopus = true,
+	Jellyfish = true,
+	Swim = true,
+	Bat = true,
+	Dragon = true,
+	WingedQuad = true,
+}
+local kinds = {
+	"Hop",
+	"Turtle",
+	"Bird",
+	"Insect",
+	"Fairy",
+	"Float",
+	"Biped",
+	"Crab",
+	"Slither",
+	"SkySerpent",
+	"Octopus",
+	"Jellyfish",
+	"Swim",
+	"Seal",
+	"Crawl",
+	"Bat",
+	"Dragon",
+	"WingedQuad",
+	"Lizard",
+	"Quad",
+}
+PetRig.Kinds = table.freeze(kinds)
+local validKinds = {}
+for _, kind in ipairs(kinds) do
+	validKinds[kind] = true
+end
+
+function PetRig.Classify(model, options)
+	options = options or {}
+	local kind = options.Kind or model:GetAttribute("PetMotionKind")
+	if not kind and options.Species then
+		kind = options.Species[model:GetAttribute("DisplayName") or model.Name]
+	end
+	if kind then
+		assert(validKinds[kind], "Unknown pet motion kind: " .. tostring(kind))
+		return kind
+	end
+	if model:FindFirstChild("Wing", true) then
+		return "Bird"
+	end
+	if model:FindFirstChild("Tentacle", true) then
+		return "Octopus"
+	end
+	if model:FindFirstChild("Leg", true) then
+		return "Quad"
+	end
+	return "Float"
+end
+
+function PetRig.Build(model, options)
+	options = options or {}
+	if model:GetAttribute("PetRigVersion") == PetRig.Version then
+		return false
+	end
+	local root = model.PrimaryPart or model:FindFirstChild("Root")
+	assert(root and root:IsA("BasePart"), model.Name .. " has no Root")
+	local rootCF = root.CFrame
+	local parts, rest, position, bones, owned = {}, {}, {}, {}, {}
+	local minY = math.huge
+	for _, p in ipairs(model:GetDescendants()) do
+		if p:IsA("BasePart") and p ~= root then
+			parts[#parts + 1] = p
+			rest[p] = rootCF:ToObjectSpace(p.CFrame)
+			position[p] = rest[p].Position
+			for _, x in ipairs({ -1, 1 }) do
+				for _, y in ipairs({ -1, 1 }) do
+					for _, z in ipairs({ -1, 1 }) do
+						minY = math.min(minY, rest[p]:PointToWorldSpace(p.Size * V(x, y, z) / 2).Y)
+					end
+				end
+			end
+		end
+	end
+	assert(#parts > 0, model.Name .. " has no geometry")
+	model.PrimaryPart = root
+	local kind = PetRig.Classify(model, options)
+	local oldRig = model:FindFirstChild("AnimationRig")
+	if oldRig then
+		oldRig:Destroy()
+	end
+	for _, v in ipairs(model:GetDescendants()) do
+		if v:IsA("WeldConstraint") and rest[v.Part1] and (v.Part0 == root or rest[v.Part0]) then
+			v:Destroy()
+		end
+	end
+	local folder = Instance.new("Folder")
+	folder.Name = "AnimationRig"
+	folder.Parent = model
+	local function matches(names)
+		local result = {}
+		for _, p in ipairs(parts) do
+			if names[p.Name] then
+				result[#result + 1] = p
+			end
+		end
+		return result
+	end
+	local function largest(list)
+		table.sort(list, function(a, b)
+			return a.Size.X * a.Size.Y * a.Size.Z > b.Size.X * b.Size.Y * b.Size.Z
+		end)
+		return list[1]
+	end
+	local function bone(p, role, parent, pivot, index, side, phase)
+		assert(not owned[p], "Part used twice as a joint: " .. p.Name)
+		local parentPart = parent and parent.part or root
+		local worldPivot = rootCF * CF(pivot or position[p])
+		local motor = Instance.new("Motor6D")
+		motor.Name = role .. "_" .. tostring(index or 1)
+		motor.Part0 = parentPart
+		motor.Part1 = p
+		motor.C0 = parentPart.CFrame:ToObjectSpace(worldPivot)
+		motor.C1 = p.CFrame:ToObjectSpace(worldPivot)
+		motor:SetAttribute("Role", role)
+		motor:SetAttribute("Index", index or 1)
+		motor:SetAttribute("Side", side or 0)
+		motor:SetAttribute("Phase", phase or 0)
+		motor:SetAttribute("Front", position[p].Z < 0)
+		motor.Parent = folder
+		local entry = {
+			part = p,
+			motor = motor,
+			role = role,
+			parent = parent,
+			pivot = pivot or position[p],
+		}
+		bones[#bones + 1] = entry
+		owned[p] = entry
+		return entry
+	end
+	local bodyParts = matches({ Body = true })
+	local serpentine = (kind == "Slither" or kind == "SkySerpent") and #bodyParts > 1
+	local bodyPart
+	if serpentine then
+		table.sort(bodyParts, function(a, b)
+			return position[a].Z < position[b].Z
+		end)
+		bodyPart = bodyParts[1]
+	else
+		bodyPart = largest(matches({
+			Torso = true,
+			Thorax = true,
+			Body = true,
+			Segment = true,
+			Shell = true,
+			Sheet = true,
+			Head = true,
+			Foot = true,
+			Bell = true,
+		}))
+		-- Prefer torso / body over a large decorative shell or oversized head.
+		bodyPart = largest(matches({ Torso = true, Thorax = true, Body = true, Segment = true }))
+			or bodyPart
+	end
+	assert(bodyPart, "No body anchor: " .. model.Name)
+	local body = bone(bodyPart, "Body", nil, position[bodyPart])
+	local spine = { body }
+	if serpentine then
+		local parent = body
+		for i = 2, #bodyParts do
+			local p = bodyParts[i]
+			parent = bone(p, "Spine", parent, (position[p] + position[parent.part]) / 2, i)
+			spine[#spine + 1] = parent
+		end
+	end
+	local headPart = largest(matches({ Head = true }))
+	local head = body
+	if headPart and headPart ~= bodyPart then
+		head = bone(headPart, "Head", body, position[headPart] - V(0, headPart.Size.Y * 0.39, 0))
+	end
+	local limbs = {}
+	local arms = {}
+	local feet = {}
+	local legParts = matches({ Leg = true, FrontLeg = true, BackLeg = true })
+	table.sort(legParts, function(a, b)
+		if math.abs(position[a].Z - position[b].Z) > 0.01 then
+			return position[a].Z < position[b].Z
+		end
+		return position[a].X < position[b].X
+	end)
+	for i, p in ipairs(legParts) do
+		local pos = position[p]
+		local side = pos.X < 0 and -1 or 1
+		local lateral = kind == "Crab"
+		local pivot = pos
+			+ (lateral and V(-side * p.Size.X * 0.42, 0, 0) or rest[p].UpVector * p.Size.Y * 0.43)
+		local phase = side < 0 and 0 or math.pi
+		if lateral then
+			phase += math.floor((i - 1) / 2) * math.pi * 0.67
+		elseif pos.Z > position[bodyPart].Z + 0.15 then
+			phase += math.pi
+		end
+		local b = bone(p, p.Name == "BackLeg" and "HindLeg" or "Leg", body, pivot, i, side, phase)
+		b.motor:SetAttribute("Front", p.Name == "FrontLeg" or pos.Z < position[bodyPart].Z)
+		limbs[#limbs + 1] = b
+	end
+	-- Bats have feet without separate leg pieces.
+	if #legParts == 0 and kind == "Bat" then
+		for i, p in ipairs(matches({ Foot = true })) do
+			limbs[#limbs + 1] = bone(
+				p,
+				"Leg",
+				body,
+				position[p] + V(0, p.Size.Y * 0.4, 0),
+				i,
+				position[p].X < 0 and -1 or 1
+			)
+		end
+	end
+	for i, p in ipairs(matches({ Arm = true })) do
+		local side = position[p].X < 0 and -1 or 1
+		local pivot = position[p]
+			+ (kind == "Crab" and V(-side * 0.18, 0, 0.24) or rest[p].UpVector * p.Size.Y * 0.44)
+		arms[#arms + 1] = bone(p, "Arm", body, pivot, i, side, side < 0 and 0 or math.pi)
+	end
+	local wingParts = matches({ Wing = true })
+	local wingOwners = {}
+	local wingBones = {}
+	for _, side in ipairs({ -1, 1 }) do
+		local list = {}
+		for _, p in ipairs(wingParts) do
+			if position[p].X * side > 0 then
+				list[#list + 1] = p
+			end
+		end
+		table.sort(list, function(a, b)
+			return position[a].Y > position[b].Y
+		end)
+		local ranges = options.WingRanges or { { 1, #list } }
+		for set, range in ipairs(ranges) do
+			local group = {}
+			for i = range[1], math.min(range[2], #list) do
+				group[#group + 1] = list[i]
+			end
+			local anchor = largest(group)
+			if anchor then
+				local pivot = rest[anchor]:PointToWorldSpace(V(-side * anchor.Size.X * 0.49, 0, 0))
+				local b = bone(
+					anchor,
+					"Wing",
+					body,
+					pivot,
+					(side < 0 and 0 or #ranges) + set,
+					side,
+					set * 0.14
+				)
+				wingBones[#wingBones + 1] = b
+				for _, p in ipairs(group) do
+					wingOwners[p] = b
+				end
+			end
+		end
+	end
+	local tailParts = matches({ Tail = true, TailSeg = true, FishTail = true, Abdomen = true })
+	if #tailParts == 0 then
+		local feather = largest(matches({ TailFeather = true, PlumeTail = true }))
+		if feather then
+			tailParts[1] = feather
+		end
+	end
+	table.sort(tailParts, function(a, b)
+		return (position[a] - position[bodyPart]).Magnitude
+			< (position[b] - position[bodyPart]).Magnitude
+	end)
+	local tails = {}
+	for i, p in ipairs(tailParts) do
+		if not owned[p] then
+			local parent = body
+			local distance = (position[p] - position[bodyPart]).Magnitude
+			for _, candidate in ipairs(tails) do
+				local d = (position[p] - position[candidate.part]).Magnitude
+				local advance = (position[p] - position[bodyPart]).Magnitude
+					- (position[candidate.part] - position[bodyPart]).Magnitude
+				-- Separate tail bases stay attached to the torso; only downstream segments chain.
+				if advance > 0.22 and d < distance and d < 2.2 then
+					parent = candidate
+					distance = d
+				end
+			end
+			local pivot = (position[p] + position[parent.part]) / 2
+			if parent == body then
+				local d = position[p] - position[bodyPart]
+				if d.Magnitude > 0.001 then
+					pivot = position[p]
+						- d.Unit * math.min(d.Magnitude * 0.38, p.Size.Magnitude * 0.25)
+				end
+			end
+			local phase = parent ~= body and (parent.motor:GetAttribute("Phase") or 0) + 0.55
+				or i * 0.58
+			tails[#tails + 1] =
+				bone(p, "Tail", parent, pivot, i, position[p].X < 0 and -1 or 1, phase)
+		end
+	end
+	local tentacles = {}
+	local tentacleParts = matches({ Tentacle = true, OralArm = true })
+	local sectors = {}
+	for _, p in ipairs(tentacleParts) do
+		local pos = position[p]
+		local sector = math.floor((math.atan2(pos.X, pos.Z) + math.pi) / (2 * math.pi) * 8) % 8
+		sectors[sector] = sectors[sector] or {}
+		table.insert(sectors[sector], p)
+	end
+	for sector, list in pairs(sectors) do
+		table.sort(list, function(a, b)
+			return position[a].Y > position[b].Y
+		end)
+		local parent = body
+		for segment, p in ipairs(list) do
+			local pivot = position[p] + V(0, p.Size.Y * 0.43, 0)
+			local b = bone(
+				p,
+				"Tentacle",
+				parent,
+				pivot,
+				sector * 4 + segment,
+				position[p].X < 0 and -1 or 1,
+				sector * 0.78 + segment * 0.45
+			)
+			tentacles[#tentacles + 1] = b
+			parent = b
+		end
+	end
+	local fins = {}
+	for i, p in ipairs(matches({ Flipper = true, Fin = true, ChestFin = true, EarFin = true })) do
+		if not owned[p] then
+			local parent = p.Name == "EarFin" and head or body
+			local side = position[p].X < 0 and -1 or 1
+			fins[#fins + 1] = bone(
+				p,
+				"Fin",
+				parent,
+				position[p] - V(side * p.Size.X * 0.35, 0, 0),
+				i,
+				side,
+				i * 0.8
+			)
+		end
+	end
+	local ears = {}
+	for _, side in ipairs({ -1, 1 }) do
+		local group = {}
+		for _, p in ipairs(matches({ Ear = true, EarTuft = true })) do
+			if position[p].X * side > 0 then
+				group[#group + 1] = p
+			end
+		end
+		local anchor = largest(group)
+		if anchor then
+			local b = bone(
+				anchor,
+				"Ear",
+				head,
+				position[anchor] - V(0, anchor.Size.Y * 0.38, 0),
+				side < 0 and 1 or 2,
+				side
+			)
+			ears[#ears + 1] = b
+		end
+	end
+	local stalks = {}
+	for i, p in ipairs(matches({ EyeStalk = true })) do
+		stalks[#stalks + 1] = bone(
+			p,
+			"Stalk",
+			head,
+			position[p] - V(0, p.Size.Y * 0.4, 0),
+			i,
+			position[p].X < 0 and -1 or 1
+		)
+	end
+	local wisps = {}
+	for i, p in ipairs(matches({ Wisp = true, Hem = true, ScarfTail = true, WindRibbon = true })) do
+		if not owned[p] then
+			wisps[#wisps + 1] = bone(
+				p,
+				"Wisp",
+				body,
+				position[p] + V(0, p.Size.Y * 0.3, 0),
+				i,
+				position[p].X < 0 and -1 or 1,
+				i * 0.8
+			)
+		end
+	end
+	local function nearest(list, p)
+		local chosen, distance = nil, math.huge
+		for _, b in ipairs(list) do
+			local d = (position[p] - position[b.part]).Magnitude
+			if d < distance then
+				chosen = b
+				distance = d
+			end
+		end
+		return chosen
+	end
+	local headNames = {
+		Eye = true,
+		EyeShine = true,
+		Blush = true,
+		Mouth = true,
+		HeadTop = true,
+		Snout = true,
+		Nose = true,
+		Jaw = true,
+		Tooth = true,
+		Tongue = true,
+		Beak = true,
+		Fang = true,
+		Hair = true,
+		HairSide = true,
+		HairBack = true,
+		Crown = true,
+		CrownSpike = true,
+		CrownGem = true,
+		CrownFlower = true,
+		LeafCrown = true,
+		LeafMask = true,
+		Antler = true,
+		AntlerGem = true,
+		Horn = true,
+		Forelock = true,
+		Mane = true,
+		Whisker = true,
+		Turban = true,
+		TurbanTop = true,
+		TurbanFold = true,
+		TurbanGem = true,
+		Beard = true,
+		Earring = true,
+		Goggle = true,
+		GoggleLens = true,
+		GoggleStrap = true,
+		Crest = true,
+		Brow = true,
+		EyeDisc = true,
+		Antenna = true,
+		AntennaTip = true,
+		Barbel = true,
+	}
+	local handNames = {
+		Hand = true,
+		Bracelet = true,
+		Armband = true,
+		Wand = true,
+		WandStar = true,
+		Staff = true,
+		StaffGem = true,
+		StaffClaw = true,
+		Trident = true,
+		TridentTip = true,
+		Scepter = true,
+		ScepterGem = true,
+		Scythe = true,
+		Blade = true,
+		LanternBase = true,
+		LanternTop = true,
+		LanternHandle = true,
+		LanternGlow = true,
+		Claw = true,
+		Pincer = true,
+	}
+	local tailNames = {
+		TailTip = true,
+		TailBlade = true,
+		TailFin = true,
+		Fluke = true,
+		TailFeather = true,
+		PlumeTail = true,
+		PlumeEye = true,
+		FlameTail = true,
+		Stinger = true,
+	}
+	for _, p in ipairs(parts) do
+		if not owned[p] then
+			local owner = body
+			local name = p.Name
+			if model:GetAttribute("PetDecorated") and p:GetAttribute("PetJointOwner") == "Wing" then
+				owner = nearest(wingBones, p) or body
+			elseif
+				model:GetAttribute("PetDecorated") and p:GetAttribute("PetJointOwner") == "Tail"
+			then
+				owner = nearest(tails, p) or body
+			elseif name:sub(1, 4) == "Wing" then
+				owner = wingOwners[p]
+				if not owner then
+					local closest, distance = nil, math.huge
+					for wing, b in pairs(wingOwners) do
+						if position[wing].X * position[p].X >= 0 then
+							local d = (position[wing] - position[p]).Magnitude
+							if d < distance then
+								closest = b
+								distance = d
+							end
+						end
+					end
+					owner = closest or body
+				end
+			elseif name == "Paw" or name == "Foot" then
+				owner = nearest(limbs, p) or body
+			elseif name == "TentacleTip" or name == "Sucker" then
+				owner = nearest(tentacles, p) or body
+			elseif name == "Ear" or name == "EarInner" or name == "EarTuft" then
+				owner = nearest(ears, p) or head
+			elseif
+				#stalks > 0
+				and (
+					name == "Eye"
+					or name == "EyeShine"
+					or name == "EyeBall"
+					or name == "Pupil"
+					or name == "StalkTip"
+				)
+			then
+				owner = nearest(stalks, p) or head
+			elseif handNames[name] then
+				owner = nearest(arms, p)
+					or (model:GetAttribute("PetDecorated") and nearest(limbs, p))
+					or body
+			elseif tailNames[name] then
+				owner = nearest(tails, p)
+					or (model:GetAttribute("PetDecorated") and serpentine and nearest(spine, p))
+					or body
+			elseif headNames[name] then
+				owner = head
+			elseif serpentine then
+				owner = nearest(spine, p) or body
+			elseif name == "Stripe" and model:FindFirstChild("Abdomen") then
+				owner = nearest(tails, p) or body
+			end
+			local weld = Instance.new("WeldConstraint")
+			weld.Name = "ArtWeld"
+			weld.Part0 = owner.part
+			weld.Part1 = p
+			weld.Parent = p
+		end
+	end
+	root.Anchored = true
+	root.CanCollide = false
+	root.CanTouch = false
+	root.CanQuery = false
+	for _, p in ipairs(parts) do
+		p.Anchored = false
+		p.Massless = true
+		p.CanCollide = false
+		p.CanTouch = false
+		p.CanQuery = false
+	end
+	model:SetAttribute("PetMotionKind", kind)
+	model.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
+	model:SetAttribute("PetCanFly", flying[kind] == true)
+	model:SetAttribute("PetRestMinY", minY)
+	model:SetAttribute("PetHoverLift", flying[kind] and math.max(0.35, 0.9 - minY) or 0)
+	model:SetAttribute("PetAnimationEnabled", true)
+	model:SetAttribute("PetRigVersion", PetRig.Version)
+	model:SetAttribute("PetJointCount", #bones)
+	model:SetAttribute("PetAnimationStates", flying[kind] and "Idle,Walk,Fly" or "Idle,Walk")
+	CollectionService:AddTag(model, options.Tag or Config.PetTag)
+	return true
+end
+
+return PetRig
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="5">
+      <Properties>
+        <string name="Name">Roaming</string>
+        <string name="Source"><![CDATA[-- Server chooses headings; all clients evaluate the same timed, curved movement segment.
+local Http = game:GetService("HttpService")
+local Roaming = { DecisionSeconds = 0.2, PredictionSeconds = 0.6, MaxCatchupSteps = 10 }
+local function finite(n)
+	return type(n) == "number" and n == n and math.abs(n) < math.huge
+end
+local function vector(v)
+	return typeof(v) == "Vector3" and finite(v.X) and finite(v.Y) and finite(v.Z)
+end
+local function flat(v)
+	return Vector3.new(v.X, 0, v.Z)
+end
+local function unit(v, fallback)
+	local d = flat(v)
+	return d.Magnitude > 0.001 and d.Unit or fallback
+end
+local function yaw(v)
+	return math.atan2(-v.X, -v.Z)
+end
+local function direction(a)
+	return Vector3.new(-math.sin(a), 0, -math.cos(a))
+end
+local function angle(a, b)
+	return (b - a + math.pi) % (2 * math.pi) - math.pi
+end
+local function limits(plan)
+	local margin = (plan.bodyHeight or 2.6) * 0.395 + (plan.edgePadding or 4)
+	return math.max(1, plan.boundsSize.X / 2 - margin), math.max(1, plan.boundsSize.Z / 2 - margin)
+end
+function Roaming.Clamp(plan, p)
+	local x, z = limits(plan)
+	local lp = plan.boundsFrame:PointToObjectSpace(p)
+	lp = Vector3.new(math.clamp(lp.X, -x, x), lp.Y, math.clamp(lp.Z, -z, z))
+	local bounded = plan.boundsFrame:PointToWorldSpace(lp)
+	local offset = flat(bounded - plan.origin)
+	if offset.Magnitude > plan.radius then
+		bounded = plan.origin + offset.Unit * plan.radius
+	end
+	return Vector3.new(bounded.X, plan.origin.Y, bounded.Z)
+end
+function Roaming.Inside(plan, p, inset)
+	local x, z = limits(plan)
+	local lp = plan.boundsFrame:PointToObjectSpace(p)
+	inset = inset or 0
+	return math.abs(lp.X) <= x - inset
+		and math.abs(lp.Z) <= z - inset
+		and flat(p - plan.origin).Magnitude <= plan.radius - inset
+end
+local function raw(plan, age)
+	local frame = plan.frame
+	local start = frame.Position
+	local a = yaw(frame.LookVector)
+	local goal = yaw(plan.goal or frame.LookVector)
+	local delta = angle(a, goal)
+	local rate = math.max(math.rad(210), plan.speed / 12)
+	local turn = math.min(age, math.abs(delta) / rate)
+	local w = delta >= 0 and rate or -rate
+	local heading = a + w * turn
+	local offset
+	if math.abs(delta) < 0.0001 then
+		heading = a
+		turn = 0
+		offset = Vector3.zero
+	else
+		offset = Vector3.new(
+			(math.cos(heading) - math.cos(a)) / w,
+			0,
+			-(math.sin(heading) - math.sin(a)) / w
+		) * plan.speed
+	end
+	return start + offset + direction(heading) * plan.speed * (age - turn), direction(heading)
+end
+function Roaming.Sample(plan, now)
+	assert(finite(now) and plan.frame, "Advance the plan before sampling")
+	local age =
+		math.clamp(math.min(now, plan.expiresAt) - plan.updatedAt, 0, Roaming.PredictionSeconds)
+	local predicted, heading = raw(plan, age)
+	local p = Roaming.Clamp(plan, predicted)
+	-- An emergency inward pivot prevents a corner from holding the egg in place.
+	-- Normal turns are curved; this only handles a prediction that reaches the hard boundary.
+	local x, z = limits(plan)
+	local lp = plan.boundsFrame:PointToObjectSpace(predicted)
+	local localHeading = plan.boundsFrame:VectorToObjectSpace(heading)
+	if math.abs(lp.X) > x and lp.X * localHeading.X > 0 then
+		localHeading = Vector3.new(-localHeading.X, 0, localHeading.Z)
+	end
+	if math.abs(lp.Z) > z and lp.Z * localHeading.Z > 0 then
+		localHeading = Vector3.new(localHeading.X, 0, -localHeading.Z)
+	end
+	heading = plan.boundsFrame:VectorToWorldSpace(localHeading).Unit
+	local radial = flat(predicted - plan.origin)
+	if radial.Magnitude > plan.radius and heading:Dot(radial) > 0 then
+		heading = (heading - 2 * heading:Dot(radial.Unit) * radial.Unit).Unit
+	end
+	local before = Roaming.Clamp(plan, raw(plan, math.max(0, age - 0.002)))
+	local speed = age > 0 and (p - before).Magnitude / math.min(age, 0.002) or plan.speed
+	return p, heading, (plan.travel or 0) + age * plan.speed, math.min(plan.speed, speed)
+end
+function Roaming.Choose(plan, playerPosition, random)
+	random = random or math.random
+	local p = plan.frame.Position
+	local current = plan.frame.LookVector
+	local away = unit(p - playerPosition, current)
+	local drift = (random() * 2 - 1) * math.rad(18)
+	local best, bestScore = current, -math.huge
+	for _, degrees in { 0, -30, 30, -60, 60, -90, 90, -120, 120, 180 } do
+		local candidate = direction(yaw(away) + math.rad(degrees) + drift)
+		local saved = plan.goal
+		plan.goal = candidate
+		local safe = true
+		local clearance = math.huge
+		local endClearance = 0
+		for _, age in { 0.1, 0.2, 0.35, 0.5 } do
+			local future = raw(plan, age)
+			if not Roaming.Inside(plan, future, 0.75) then
+				safe = false
+			end
+			local lp = plan.boundsFrame:PointToObjectSpace(future)
+			local x, z = limits(plan)
+			endClearance = math.min(
+				x - math.abs(lp.X),
+				z - math.abs(lp.Z),
+				plan.radius - flat(future - plan.origin).Magnitude
+			)
+			clearance = math.min(clearance, endClearance)
+		end
+		plan.goal = saved
+		local score = candidate:Dot(away) * 3
+			+ candidate:Dot(current) * 0.7
+			+ math.clamp(clearance, -30, 15) * 0.08
+			+ random() * 0.7
+		-- If a turn starts beside a wall, favour clearing it rather than repeatedly grazing it.
+		if not safe then
+			score = -100 + endClearance * 2 + candidate:Dot(away) * 0.5 + random() * 0.2
+		end
+		if score > bestScore then
+			bestScore = score
+			best = candidate
+		end
+	end
+	return best
+end
+function Roaming.Advance(plan, now, playerPosition, random)
+	assert(finite(now) and vector(playerPosition), "Expected a finite time and player position")
+	local runAt = plan.startsAt
+	if now < runAt or not plan.boundsFrame then
+		return false
+	end
+	now = math.min(now, plan.expiresAt)
+	local changed = false
+	if not plan.frame then
+		local heading = unit(plan.origin - playerPosition, plan.direction)
+		plan.frame = CFrame.lookAt(plan.origin, plan.origin + heading)
+		plan.updatedAt = runAt
+		plan.travel = 0
+		plan.goal = Roaming.Choose(plan, playerPosition, random)
+		-- Feet emerge facing the first safe direction; there is no outward run into a nearby edge.
+		plan.frame = CFrame.lookAt(plan.origin, plan.origin + plan.goal)
+		changed = true
+	end
+	-- A long server pause holds the last position and resumes a bounded number of decisions.
+	if now - plan.updatedAt > Roaming.DecisionSeconds * Roaming.MaxCatchupSteps then
+		plan.updatedAt = now - Roaming.DecisionSeconds * Roaming.MaxCatchupSteps
+		changed = true
+	end
+	while plan.updatedAt + Roaming.DecisionSeconds <= now do
+		local t = plan.updatedAt + Roaming.DecisionSeconds
+		local p, heading, travel = Roaming.Sample(plan, t)
+		plan.frame = CFrame.lookAt(p, p + heading)
+		plan.updatedAt = t
+		plan.travel = travel
+		plan.goal = Roaming.Choose(plan, playerPosition, random)
+		changed = true
+	end
+	return changed
+end
+
+-- The origin must lie inside the usable rectangle so radial clamping stays inside both bounds.
+function Roaming.new(options)
+	assert(type(options) == "table", "Expected roaming options")
+	assert(typeof(options.boundsFrame) == "CFrame", "boundsFrame must be a CFrame")
+	assert(vector(options.boundsFrame.Position), "boundsFrame must have a finite position")
+	local components = { options.boundsFrame:GetComponents() }
+	for _, n in ipairs(components) do
+		assert(finite(n), "boundsFrame must be finite")
+	end
+	assert(
+		options.boundsFrame.UpVector:Dot(Vector3.yAxis) > 0.999999,
+		"boundsFrame must be upright (yaw rotation only)"
+	)
+	assert(
+		vector(options.boundsSize) and options.boundsSize.X > 0 and options.boundsSize.Z > 0,
+		"boundsSize must have positive X/Z dimensions"
+	)
+	assert(vector(options.origin), "origin must be a finite Vector3")
+	local plan = {
+		boundsFrame = options.boundsFrame,
+		boundsSize = options.boundsSize,
+		origin = options.origin,
+		radius = options.radius or 20,
+		speed = options.speed or 8,
+		bodyHeight = options.bodyHeight or 2.6,
+		edgePadding = options.edgePadding or 4,
+		startsAt = options.startsAt or 0,
+		expiresAt = options.expiresAt or math.huge,
+		direction = options.direction or Vector3.new(0, 0, -1),
+	}
+	assert(finite(plan.radius) and plan.radius > 0, "radius must be positive and finite")
+	assert(finite(plan.speed) and plan.speed >= 0, "speed must be non-negative and finite")
+	assert(
+		finite(plan.bodyHeight)
+			and plan.bodyHeight >= 0
+			and finite(plan.edgePadding)
+			and plan.edgePadding >= 0,
+		"Invalid body margin"
+	)
+	assert(
+		finite(plan.startsAt)
+			and type(plan.expiresAt) == "number"
+			and plan.expiresAt >= plan.startsAt,
+		"Invalid start / expiry"
+	)
+	assert(
+		vector(plan.direction) and flat(plan.direction).Magnitude > 0.001,
+		"direction must have a horizontal component"
+	)
+	local x, z = limits(plan)
+	local lp = plan.boundsFrame:PointToObjectSpace(plan.origin)
+	assert(
+		math.abs(lp.X) <= x and math.abs(lp.Z) <= z,
+		"origin must be inside the usable rectangle"
+	)
+	plan.direction = flat(plan.direction).Unit
+	return plan
+end
+
+function Roaming.Snapshot(plan)
+	assert(plan.frame and plan.goal, "Advance the plan before taking a snapshot")
+	local p, d, g = plan.frame.Position, plan.frame.LookVector, plan.goal
+	return {
+		t = plan.updatedAt,
+		p = { p.X, p.Y, p.Z },
+		d = { d.X, d.Y, d.Z },
+		g = { g.X, g.Y, g.Z },
+		travel = plan.travel or 0,
+	}
+end
+
+local function readVector(value)
+	if
+		type(value) ~= "table"
+		or not finite(value[1])
+		or not finite(value[2])
+		or not finite(value[3])
+	then
+		return nil
+	end
+	return Vector3.new(value[1], value[2], value[3])
+end
+
+-- Apply only trusted server snapshots on clients. This is validation, not gameplay authorization.
+function Roaming.ApplySnapshot(plan, state)
+	if
+		type(state) ~= "table"
+		or not finite(state.t)
+		or not finite(state.travel)
+		or state.travel < 0
+	then
+		return false
+	end
+	if
+		state.t < plan.startsAt
+		or state.t > plan.expiresAt
+		or (plan.updatedAt and state.t < plan.updatedAt)
+	then
+		return false
+	end
+	local p, d, g = readVector(state.p), readVector(state.d), readVector(state.g)
+	if not p or not d or not g or flat(d).Magnitude < 0.001 or flat(g).Magnitude < 0.001 then
+		return false
+	end
+	if math.abs(p.Y - plan.origin.Y) > 0.001 or not Roaming.Inside(plan, p, -0.001) then
+		return false
+	end
+	d = flat(d).Unit
+	g = flat(g).Unit
+	plan.frame = CFrame.lookAt(p, p + d)
+	plan.goal = g
+	plan.updatedAt = state.t
+	plan.travel = state.travel
+	return true
+end
+
+function Roaming.Encode(plan)
+	return Http:JSONEncode(Roaming.Snapshot(plan))
+end
+
+function Roaming.Decode(plan, value)
+	if type(value) ~= "string" or #value > 4096 then
+		return false
+	end
+	local ok, state = pcall(Http.JSONDecode, Http, value)
+	return ok and Roaming.ApplySnapshot(plan, state) or false
+end
+
+return Roaming
+]]></string>
+      </Properties>
+    </Item>
+  </Item>
+</roblox>
