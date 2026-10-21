@@ -43,6 +43,13 @@ Options: `Tag` (must match the builder), `ClientSkinning` (default true),
 Action entries are `{name, durationSeconds, mode}`, where mode is idle, fly, or any.
 Use positive finite durations. Default actions include Stretch, Jump, Shake, Barrel, Loop,
 Preen, Twirl, Spin, Coil, Wave, and other motion-kind-specific actions.
+Invalid durations, empty names, and unknown modes fail during construction. Action lists are
+copied and frozen, so later edits to the caller's options do not change an existing animator.
+Pass an empty list for a model name to disable its signature actions.
+
+Start is idempotent. Stop cancels queued streaming/tag attachments as well as active listeners;
+an old deferred callback cannot reattach a model after a stop/restart. Tag removal cancels pending
+attachment. Incomplete Motor6D endpoints are skipped until another streaming notification arrives.
 
 Set `PetAnimationState` to Idle, Walk, or Fly, or clear it for automatic movement detection.
 A non-flying kind rejects a forced Fly state through SetState.

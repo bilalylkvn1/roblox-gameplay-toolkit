@@ -4,7 +4,7 @@
       <string name="Name">GameplayToolkit</string>
       <string name="Source"><![CDATA[-- Requiring the toolkit starts no loops and creates no instances.
 return table.freeze({
-	Version = "0.1.0",
+	Version = "0.2.0",
 	Money = require(script.Money),
 	Roaming = require(script.Roaming),
 	PetRig = require(script.PetRig),
@@ -16,7 +16,7 @@ return table.freeze({
       <Properties>
         <string name="Name">Config</string>
         <string name="Source"><![CDATA[-- Shared defaults. Pass matching Tag options to the rig builder and animator to isolate collections.
-return table.freeze({ PetTag = "GameplayToolkitPet", Version = "0.1.0" })
+return table.freeze({ PetTag = "GameplayToolkitPet", Version = "0.2.0" })
 ]]></string>
       </Properties>
     </Item>
@@ -107,6 +107,63 @@ function Money.Subtract(a, b)
 	end
 	return Money.Normalize(table.concat(out))
 end
+-- Grade-school multiplication never converts a balance to a floating-point number.
+function Money.Multiply(a, b)
+	a = assert(Money.Normalize(a), "Invalid Money")
+	b = assert(Money.Normalize(b), "Invalid Money")
+	if a == "0" or b == "0" then
+		return "0"
+	end
+	local digits = table.create(#a + #b, 0)
+	for i = #a, 1, -1 do
+		local x = string.byte(a, i) - 48
+		for j = #b, 1, -1 do
+			local index = (#a - i) + (#b - j) + 1
+			digits[index] += x * (string.byte(b, j) - 48)
+		end
+	end
+	for i = 1, #digits - 1 do
+		digits[i + 1] += math.floor(digits[i] / 10)
+		digits[i] %= 10
+	end
+	while #digits > 1 and digits[#digits] == 0 do
+		table.remove(digits)
+	end
+	if #digits > #Money.MAX then
+		return Money.MAX
+	end
+	local out = {}
+	for i = #digits, 1, -1 do
+		out[#out + 1] = tostring(digits[i])
+	end
+	return Money.Clamp(table.concat(out))
+end
+
+-- Exact floor division; the remainder satisfies a = quotient * b + remainder.
+-- Unlike reward-producing Add / Multiply, neither result is saturated.
+function Money.Divide(a, b)
+	a = assert(Money.Normalize(a), "Invalid Money")
+	b = assert(Money.Normalize(b), "Invalid Money")
+	assert(b ~= "0", "Cannot divide Money by zero")
+	local quotient, remainder = {}, "0"
+	for i = 1, #a do
+		remainder = assert(Money.Normalize(remainder .. a:sub(i, i)))
+		local digit = 0
+		while Money.Compare(remainder, b) >= 0 do
+			remainder = Money.Subtract(remainder, b)
+			digit += 1
+		end
+		quotient[#quotient + 1] = tostring(digit)
+	end
+	return Money.Normalize(table.concat(quotient)), remainder
+end
+
+function Money.FormatFull(value)
+	local s = Money.Normalize(value) or "0"
+	local reversed = s:reverse():gsub("(%d%d%d)", "%1,")
+	return (reversed:reverse():gsub("^,", ""))
+end
+
 function Money.Format(value)
 	local s = Money.Normalize(value) or "0"
 	if #s < 4 then
@@ -418,13 +475,37 @@ end
 
 function PetAnimator.new(options)
 	options = options or {}
+	local actions = {}
+	assert(type(options.ActionsByName or {}) == "table", "ActionsByName must be a table")
+	for name, list in pairs(options.ActionsByName or {}) do
+		assert(type(name) == "string" and type(list) == "table", "Expected action lists by name")
+		local copied = {}
+		for _, action in ipairs(list) do
+			assert(
+				type(action) == "table" and type(action[1]) == "string" and #action[1] > 0,
+				"Action must have a non-empty name"
+			)
+			assert(
+				type(action[2]) == "number" and action[2] > 0 and action[2] < math.huge,
+				"Action duration must be positive and finite"
+			)
+			assert(
+				action[3] == "idle" or action[3] == "fly" or action[3] == "any",
+				"Action mode must be idle, fly, or any"
+			)
+			copied[#copied + 1] = table.freeze({ action[1], action[2], action[3] })
+		end
+		actions[name] = table.freeze(copied)
+	end
 	return setmetatable({
 		Rigs = {},
 		Connections = {},
+		Pending = {},
+		Generation = 0,
 		Elapsed = 0,
 		Started = false,
 		Tag = options.Tag or Config.PetTag,
-		ActionsByName = options.ActionsByName or {},
+		ActionsByName = table.freeze(actions),
 		ClientSkinning = options.ClientSkinning ~= false,
 		WorldRoot = options.WorldRoot or workspace,
 	}, PetAnimator)
@@ -475,6 +556,10 @@ function PetAnimator:Attach(model)
 	}
 	for _, joint in ipairs(folder:GetChildren()) do
 		if joint:IsA("Motor6D") then
+			-- Streaming may deliver the joint before either endpoint is ready.
+			if not joint.Part0 or not joint.Part1 then
+				return
+			end
 			rig.Joints[#rig.Joints + 1] = {
 				Motor = joint,
 				Base = joint.C0,
@@ -1160,39 +1245,52 @@ function PetAnimator:Step(dt)
 	end
 end
 
+-- Tag/streaming events can arrive repeatedly before deferred work is evaluated.
+-- Coalesce them, then check tag membership and lifecycle again at execution time.
+local function scheduleAttach(self, model)
+	if not self.Started or self.Pending[model] then
+		return
+	end
+	local generation = self.Generation
+	self.Pending[model] = generation
+	task.defer(function()
+		if self.Generation ~= generation or self.Pending[model] ~= generation then
+			return
+		end
+		self.Pending[model] = nil
+		if self.Started and CollectionService:HasTag(model, self.Tag) then
+			self:Attach(model)
+		end
+	end)
+end
+
 function PetAnimator:Start()
 	assert(RunService:IsClient(), "PetAnimator:Start() must run from a LocalScript")
 	if self.Started then
 		return
 	end
 	self.Started = true
+	self.Generation += 1
 	for _, model in ipairs(CollectionService:GetTagged(self.Tag)) do
 		self:Attach(model)
 	end
 	self.Connections[#self.Connections + 1] = CollectionService:GetInstanceAddedSignal(self.Tag)
 		:Connect(function(model)
 			if model:IsDescendantOf(self.WorldRoot) or model:GetAttribute("PetViewport") then
-				task.defer(function()
-					if self.Started then
-						self:Attach(model)
-					end
-				end)
+				scheduleAttach(self, model)
 			end
 		end)
 	self.Connections[#self.Connections + 1] = CollectionService:GetInstanceRemovedSignal(self.Tag)
 		:Connect(function(model)
+			self.Pending[model] = nil
 			self:Detach(model)
 		end)
 	-- Streaming can place a tagged model in Workspace before its joints arrive.
 	self.Connections[#self.Connections + 1] = self.WorldRoot.DescendantAdded:Connect(function(v)
-		if v:IsA("Motor6D") or v:IsA("Model") then
+		if v:IsA("Motor6D") or v:IsA("Model") or v:IsA("BasePart") then
 			local model = v:IsA("Model") and v or v:FindFirstAncestorOfClass("Model")
 			if model and CollectionService:HasTag(model, self.Tag) and not self.Rigs[model] then
-				task.defer(function()
-					if self.Started then
-						self:Attach(model)
-					end
-				end)
+				scheduleAttach(self, model)
 			end
 		end
 	end)
@@ -1203,6 +1301,8 @@ end
 
 function PetAnimator:Stop()
 	self.Started = false
+	self.Generation += 1
+	table.clear(self.Pending)
 	for _, c in ipairs(self.Connections) do
 		c:Disconnect()
 	end
@@ -1819,7 +1919,11 @@ local function finite(n)
 	return type(n) == "number" and n == n and math.abs(n) < math.huge
 end
 local function vector(v)
-	return typeof(v) == "Vector3" and finite(v.X) and finite(v.Y) and finite(v.Z)
+	return typeof(v) == "Vector3"
+		and finite(v.X)
+		and finite(v.Y)
+		and finite(v.Z)
+		and finite(v.Magnitude)
 end
 local function flat(v)
 	return Vector3.new(v.X, 0, v.Z)
@@ -1839,7 +1943,7 @@ local function angle(a, b)
 end
 local function limits(plan)
 	local margin = (plan.bodyHeight or 2.6) * 0.395 + (plan.edgePadding or 4)
-	return math.max(1, plan.boundsSize.X / 2 - margin), math.max(1, plan.boundsSize.Z / 2 - margin)
+	return plan.boundsSize.X / 2 - margin, plan.boundsSize.Z / 2 - margin
 end
 function Roaming.Clamp(plan, p)
 	local x, z = limits(plan)
@@ -1908,7 +2012,10 @@ function Roaming.Sample(plan, now)
 	end
 	local before = Roaming.Clamp(plan, raw(plan, math.max(0, age - 0.002)))
 	local speed = age > 0 and (p - before).Magnitude / math.min(age, 0.002) or plan.speed
-	return p, heading, (plan.travel or 0) + age * plan.speed, math.min(plan.speed, speed)
+	return p,
+		heading,
+		(plan.travel or 0) + age * plan.speed,
+		(now >= plan.expiresAt and 0 or math.min(plan.speed, speed))
 end
 function Roaming.Choose(plan, playerPosition, random)
 	random = random or math.random
@@ -1961,6 +2068,9 @@ function Roaming.Advance(plan, now, playerPosition, random)
 		return false
 	end
 	now = math.min(now, plan.expiresAt)
+	if plan.updatedAt and now < plan.updatedAt then
+		return false
+	end
 	local changed = false
 	if not plan.frame then
 		local heading = unit(plan.origin - playerPosition, plan.direction)
@@ -2039,6 +2149,7 @@ function Roaming.new(options)
 		"direction must have a horizontal component"
 	)
 	local x, z = limits(plan)
+	assert(x > 0 and z > 0, "boundsSize must leave room for the body margin and edgePadding")
 	local lp = plan.boundsFrame:PointToObjectSpace(plan.origin)
 	assert(
 		math.abs(lp.X) <= x and math.abs(lp.Z) <= z,
@@ -2069,7 +2180,8 @@ local function readVector(value)
 	then
 		return nil
 	end
-	return Vector3.new(value[1], value[2], value[3])
+	local result = Vector3.new(value[1], value[2], value[3])
+	return vector(result) and result or nil
 end
 
 -- Apply only trusted server snapshots on clients. This is validation, not gameplay authorization.
@@ -2086,6 +2198,7 @@ function Roaming.ApplySnapshot(plan, state)
 		state.t < plan.startsAt
 		or state.t > plan.expiresAt
 		or (plan.updatedAt and state.t < plan.updatedAt)
+		or (plan.travel and state.travel < plan.travel - 0.000001)
 	then
 		return false
 	end
@@ -2101,7 +2214,7 @@ function Roaming.ApplySnapshot(plan, state)
 	plan.frame = CFrame.lookAt(p, p + d)
 	plan.goal = g
 	plan.updatedAt = state.t
-	plan.travel = state.travel
+	plan.travel = math.max(plan.travel or 0, state.travel)
 	return true
 end
 

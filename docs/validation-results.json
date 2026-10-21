@@ -1,15 +1,17 @@
 {
   "date": "2026-10-21",
-  "version": "0.1.0",
-  "tools": {"luau": "0.743", "rojo": "7.7.1", "stylua": "2.6.0"},
-  "engine": {
-    "environment": "Roblox Studio Edit; detached ModuleScripts and WorldModels",
-    "assertions": {"Money": 430, "Roaming": 1619, "Pets": 54509, "total": 56558},
-    "motionKinds": 20,
-    "result": "passed"
+  "version": "0.2.0",
+  "environment": "Windows; portable checks only",
+  "tools": {"luau": "0.743", "lune": "0.10.5", "rojo": "7.7.1", "stylua": "2.6.0"},
+  "portable": {
+    "Money": {"assertions": 2454, "result": "passed", "runtime": "Luau CLI"},
+    "Roaming": {"assertions": 1737, "result": "passed", "runtime": "Lune math/JSON adapter with upright lookAt substitute"},
+    "AnimatorLifecycle": {"assertions": 17, "result": "passed", "runtime": "Lune with explicit service mocks; geometry operations replaced"},
+    "totalAssertions": 4208
   },
-  "cliCurrency": {"assertions": 430, "result": "passed"},
-  "builds": {"GameplayToolkit.rbxmx": "passed", "GameplayToolkitDemo.rbxlx": "passed"},
-  "note": "Assertion totals include sampled points and transform components; these are not counts of distinct scenarios.",
-  "limits": ["No published multiplayer validation", "No device performance benchmark", "No external adoption claim"]
+  "compile": "passed",
+  "format": "passed",
+  "builds": {"GameplayToolkit.rbxmx": "passed", "GameplayToolkitDemo.rbxlx": "passed", "repeatBuildsIdentical": true},
+  "engine": {"result": "not_run", "reason": "No connected Studio instance", "previousVersionRecord": "validation-v0.1.0.json"},
+  "limits": ["Portable adapters do not verify Roblox physics or rendering", "No published multiplayer validation", "No device performance benchmark", "No external adoption claim"]
 }

@@ -1,0 +1,32 @@
+name: Bug report
+description: Report a reproducible problem with the toolkit.
+body:
+  - type: dropdown
+    id: module
+    attributes:
+      label: Affected module
+      options: [Money, Roaming, PetRig, PetAnimator, Demo or installation, Other]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Toolkit version and environment
+      description: Include the toolkit version or commit and Studio, Luau, or Lune version.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Include runnable code and any primitive model naming or joint layout needed.
+      render: lua
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: Include the exact error if present. Use primitive art; omit player data and credentials.
+    validations:
+      required: true

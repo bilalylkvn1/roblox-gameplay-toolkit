@@ -1,5 +1,7 @@
 # Roblox Gameplay Toolkit
 
+[![Validate toolkit](https://github.com/bilalylkvn1/roblox-gameplay-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/bilalylkvn1/roblox-gameplay-toolkit/actions/workflows/ci.yml)
+
 Reusable Luau systems for procedural pet animation, bounded roaming, and exact integer currency.
 
 Extracted and adapted from systems developed for **Kick an Egg**. This is a new standalone
@@ -29,6 +31,20 @@ other `src/*.luau` files as its child ModuleScripts.
 local Toolkit = require(game.ReplicatedStorage.GameplayToolkit)
 print(Toolkit.Money.Add("9007199254740991", "10")) -- "9007199254741001"
 ```
+
+## Exact rewards and prices
+
+Keep currency as decimal strings throughout arithmetic and persistence:
+
+```lua
+local Money = require(game.ReplicatedStorage.GameplayToolkit).Money
+local total = Money.Multiply("9007199254740993", "3") -- "27021597764222979"
+local each, remainder = Money.Divide(total, "4") -- "6755399441055744", "3"
+print(Money.FormatFull(total)) -- 27,021,597,764,222,979
+```
+
+Add and Multiply saturate at 10^18. Divide returns an exact floor quotient and remainder;
+Subtract returns nil on underflow. See the [complete currency API](docs/money.md).
 
 ## Pet animation
 
@@ -109,12 +125,24 @@ For the engine-independent currency suite, use the
 luau scripts/money-tests.luau
 ```
 
-CI compiles the Luau files, runs the currency suite, and rebuilds the Studio artifacts.
-Roblox engine behavior is verified separately in Studio.
+The portable movement and lifecycle regressions use [Lune 0.10.5](https://github.com/lune-org/lune/releases/tag/v0.10.5):
+
+```sh
+lune run scripts/roaming-tests.luau
+lune run scripts/animator-tests.luau
+```
+
+CI compiles every Luau file, checks StyLua formatting, runs all three portable suites, and
+checks that both committed Studio downloads match a fresh Rojo build. Validated downloads
+are also available as workflow artifacts. Roblox posing, physics, and rendering still require
+the separate Studio suites; Lune uses a documented math adapter and mocked lifecycle services.
 
 ## Project status
 
-Version **0.1.0** is an initial extraction with a documented model contract.
+Version **0.2.0** expands exact arithmetic and hardens roaming and animator lifecycle handling.
+The local portable suites pass 4,208 assertions. Current engine changes still need a Studio run;
+the recorded 0.1.0 engine results are historical evidence, not validation of 0.2.0.
+See [validation and limitations](docs/validation.md) and [migration notes](CHANGELOG.md).
 The original game-specific creature art, custom boss rigs, sounds, purchase systems, account
 configuration, and player data are not included.
 

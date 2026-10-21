@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0 — 2026-10-21
+
+- Add exact saturated Money.Multiply, quotient/remainder Money.Divide, and Money.FormatFull.
+- Fix tiny roaming bounds expanding outside their physical rectangle; reject margins with no usable area.
+- Reject overflowing snapshot vectors and decreasing travel; ignore backwards Advance clocks.
+- Report zero instantaneous speed after roaming expiry.
+- Cancel and coalesce deferred animator attachments across tag removal and stop/restart.
+- Skip incomplete streamed Motor6D endpoints and validate/copy custom action configuration.
+- Run the shared roaming spec through a documented Lune math/JSON adapter in CI.
+- Add mocked animator lifecycle checks, formatting checks, artifact freshness checks, and contribution templates.
+- Rebuild the installable module and demo. Updated Roblox engine suites require a separate Studio run.
+
 ## 0.1.0 — 2026-10-21
 
 - Extract procedural part-based pet rigging and client animation into reusable modules.

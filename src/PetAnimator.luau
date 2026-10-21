@@ -292,13 +292,37 @@ end
 
 function PetAnimator.new(options)
 	options = options or {}
+	local actions = {}
+	assert(type(options.ActionsByName or {}) == "table", "ActionsByName must be a table")
+	for name, list in pairs(options.ActionsByName or {}) do
+		assert(type(name) == "string" and type(list) == "table", "Expected action lists by name")
+		local copied = {}
+		for _, action in ipairs(list) do
+			assert(
+				type(action) == "table" and type(action[1]) == "string" and #action[1] > 0,
+				"Action must have a non-empty name"
+			)
+			assert(
+				type(action[2]) == "number" and action[2] > 0 and action[2] < math.huge,
+				"Action duration must be positive and finite"
+			)
+			assert(
+				action[3] == "idle" or action[3] == "fly" or action[3] == "any",
+				"Action mode must be idle, fly, or any"
+			)
+			copied[#copied + 1] = table.freeze({ action[1], action[2], action[3] })
+		end
+		actions[name] = table.freeze(copied)
+	end
 	return setmetatable({
 		Rigs = {},
 		Connections = {},
+		Pending = {},
+		Generation = 0,
 		Elapsed = 0,
 		Started = false,
 		Tag = options.Tag or Config.PetTag,
-		ActionsByName = options.ActionsByName or {},
+		ActionsByName = table.freeze(actions),
 		ClientSkinning = options.ClientSkinning ~= false,
 		WorldRoot = options.WorldRoot or workspace,
 	}, PetAnimator)
@@ -349,6 +373,10 @@ function PetAnimator:Attach(model)
 	}
 	for _, joint in ipairs(folder:GetChildren()) do
 		if joint:IsA("Motor6D") then
+			-- Streaming may deliver the joint before either endpoint is ready.
+			if not joint.Part0 or not joint.Part1 then
+				return
+			end
 			rig.Joints[#rig.Joints + 1] = {
 				Motor = joint,
 				Base = joint.C0,
@@ -1034,39 +1062,52 @@ function PetAnimator:Step(dt)
 	end
 end
 
+-- Tag/streaming events can arrive repeatedly before deferred work is evaluated.
+-- Coalesce them, then check tag membership and lifecycle again at execution time.
+local function scheduleAttach(self, model)
+	if not self.Started or self.Pending[model] then
+		return
+	end
+	local generation = self.Generation
+	self.Pending[model] = generation
+	task.defer(function()
+		if self.Generation ~= generation or self.Pending[model] ~= generation then
+			return
+		end
+		self.Pending[model] = nil
+		if self.Started and CollectionService:HasTag(model, self.Tag) then
+			self:Attach(model)
+		end
+	end)
+end
+
 function PetAnimator:Start()
 	assert(RunService:IsClient(), "PetAnimator:Start() must run from a LocalScript")
 	if self.Started then
 		return
 	end
 	self.Started = true
+	self.Generation += 1
 	for _, model in ipairs(CollectionService:GetTagged(self.Tag)) do
 		self:Attach(model)
 	end
 	self.Connections[#self.Connections + 1] = CollectionService:GetInstanceAddedSignal(self.Tag)
 		:Connect(function(model)
 			if model:IsDescendantOf(self.WorldRoot) or model:GetAttribute("PetViewport") then
-				task.defer(function()
-					if self.Started then
-						self:Attach(model)
-					end
-				end)
+				scheduleAttach(self, model)
 			end
 		end)
 	self.Connections[#self.Connections + 1] = CollectionService:GetInstanceRemovedSignal(self.Tag)
 		:Connect(function(model)
+			self.Pending[model] = nil
 			self:Detach(model)
 		end)
 	-- Streaming can place a tagged model in Workspace before its joints arrive.
 	self.Connections[#self.Connections + 1] = self.WorldRoot.DescendantAdded:Connect(function(v)
-		if v:IsA("Motor6D") or v:IsA("Model") then
+		if v:IsA("Motor6D") or v:IsA("Model") or v:IsA("BasePart") then
 			local model = v:IsA("Model") and v or v:FindFirstAncestorOfClass("Model")
 			if model and CollectionService:HasTag(model, self.Tag) and not self.Rigs[model] then
-				task.defer(function()
-					if self.Started then
-						self:Attach(model)
-					end
-				end)
+				scheduleAttach(self, model)
 			end
 		end
 	end)
@@ -1077,6 +1118,8 @@ end
 
 function PetAnimator:Stop()
 	self.Started = false
+	self.Generation += 1
+	table.clear(self.Pending)
 	for _, c in ipairs(self.Connections) do
 		c:Disconnect()
 	end
