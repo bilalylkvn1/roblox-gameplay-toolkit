@@ -1,0 +1,17 @@
+name: Feature request
+description: Suggest a reusable capability or improvement.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What use case does this solve?
+      description: Describe the integrating game's need and the current workaround.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior or API
+      description: Include an example and any compatibility concerns.
+    validations:
+      required: true
