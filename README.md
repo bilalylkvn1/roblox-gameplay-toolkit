@@ -128,6 +128,8 @@ require(game.ServerStorage.GameplayToolkitTests.Run)(
 ```
 
 [Validation notes](docs/validation.md) distinguish engine tests, CLI tests, and unmeasured behavior.
+Community testers can use the [Studio validation protocol and evidence template](docs/studio-validation-protocol.md)
+to verify changed engine behavior and report reproducible results without claiming unrun tests passed.
 
 To rebuild with [Rojo 7](https://rojo.space/docs/v7/):
 
