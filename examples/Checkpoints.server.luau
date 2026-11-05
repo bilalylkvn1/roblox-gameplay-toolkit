@@ -18,9 +18,16 @@ local function trackPlayer(player)
 	owned:Add(player.CharacterAdded:Connect(function(character)
 		local root = character:WaitForChild("HumanoidRootPart", 10)
 		local part = checkpoints[player]
-		if not stopped and playerBags[player] == owned and player.Parent == Players
-			and root and player.Character == character and part and part:IsDescendantOf(workspace)
-			and CollectionService:HasTag(part, "ToolkitCheckpoint") then
+		if
+			not stopped
+			and playerBags[player] == owned
+			and player.Parent == Players
+			and root
+			and player.Character == character
+			and part
+			and part:IsDescendantOf(workspace)
+			and CollectionService:HasTag(part, "ToolkitCheckpoint")
+		then
 			character:PivotTo(part.CFrame + Vector3.new(0, part.Size.Y / 2 + 4, 0))
 		end
 	end))
@@ -49,7 +56,13 @@ local function trackPart(part)
 		local character = hit:FindFirstAncestorOfClass("Model")
 		local player = character and Players:GetPlayerFromCharacter(character)
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-		if stopped or not player or not humanoid or humanoid.Health <= 0 or not part:IsDescendantOf(workspace) then
+		if
+			stopped
+			or not player
+			or not humanoid
+			or humanoid.Health <= 0
+			or not part:IsDescendantOf(workspace)
+		then
 			return
 		end
 		if checkpoints[player] ~= part and touches:Try(player) then
