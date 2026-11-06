@@ -28,3 +28,17 @@ is not supported; destroy and reinstall the script to stop/restart it.
 
 Touched events are a convenience gameplay signal, not an anti-cheat boundary.
 Add server-side stage and movement validation before using checkpoints for rewards.
+
+## Running the portable lifecycle regressions
+
+From the repository root with Lua 5.4 installed, run:
+
+```sh
+lua5.4 scripts/checkpoint-lifecycle-tests.lua examples/Checkpoints.server.luau
+```
+
+The harness executes the actual example source with mocked services. It checks
+normal respawn, script destruction during root loading, and player departure
+during root loading. The expected result is `3 mocked scenarios passed`.
+The mocks substitute CleanupBag, Cooldown, geometry, and event delivery, so the
+Studio checklist above remains required. CI runs this command automatically.
