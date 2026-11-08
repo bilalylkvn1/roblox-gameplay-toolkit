@@ -38,12 +38,13 @@ local function scenario(stopDuringWait)
 	function part:IsDescendantOf()
 		return true
 	end
+	local tagged = true
 	local tags = {}
 	function tags:GetTagged()
 		return { part }
 	end
 	function tags:HasTag()
-		return true
+		return tagged
 	end
 	function tags:GetInstanceAddedSignal()
 		return signal()
@@ -129,6 +130,12 @@ local function scenario(stopDuringWait)
 		elseif stopDuringWait == "leave" then
 			removing:Fire(player)
 			player.Parent = nil
+		elseif stopDuringWait == "timeout" then
+			return nil
+		elseif stopDuringWait == "replaced" then
+			player.Character = {}
+		elseif stopDuringWait == "untagged" then
+			tagged = false
 		end
 		return {}
 	end
@@ -144,4 +151,7 @@ end
 scenario("normal")
 scenario("destroy")
 scenario("leave")
-print("checkpoint lifecycle: 3 mocked scenarios passed")
+scenario("timeout")
+scenario("replaced")
+scenario("untagged")
+print("checkpoint lifecycle: 6 mocked scenarios passed")
