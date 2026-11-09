@@ -16,6 +16,19 @@ and disconnects its touch handler. Departing players are removed from all maps.
 Destroying the script cleans up its owned connections. Disable/re-enable lifecycle
 is not supported; destroy and reinstall the script to stop/restart it.
 
+## Try the checkpoint place in Studio
+
+Download `GameplayToolkitCheckpoints.rbxlx` from a successful CI run, or build
+it from the repository root with Rojo 7.7.1.
+
+```sh
+rojo build checkpoints.project.json -o GameplayToolkitCheckpoints.rbxlx
+```
+
+Open the place in Studio and start a local server with two players. The blue and
+green pads already carry the `ToolkitCheckpoint` tag. Walk one player onto each
+pad, then reset both characters. Each should reappear over their own pad.
+
 ## Required Studio validation (not yet run)
 
 - With two clients, touch different platforms and reset both characters: each
@@ -39,6 +52,7 @@ lua5.4 scripts/checkpoint-lifecycle-tests.lua examples/Checkpoints.server.luau
 
 The harness executes the actual example source with mocked services. It checks
 normal respawn, script destruction during root loading, and player departure
-during root loading. The expected result is `3 mocked scenarios passed`.
+during root loading. It also covers root timeout, character replacement, and tag
+removal while the root is loading. The expected result is `6 mocked scenarios passed`.
 The mocks substitute CleanupBag, Cooldown, geometry, and event delivery, so the
 Studio checklist above remains required. CI runs this command automatically.
