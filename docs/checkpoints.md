@@ -3,7 +3,11 @@
 Copy `examples/Checkpoints.server.luau` to ServerScriptService. Install GameplayToolkit
 in ReplicatedStorage. Tag anchored, touchable BaseParts in Workspace with
 `ToolkitCheckpoint` using Studio's Tag Editor. The last touched checkpoint becomes
-the player's respawn destination, four studs above its top face.
+the player's respawn destination. The character pivot is placed four studs above
+the platform's top face by default. Set the platform's numeric
+`CheckpointSpawnClearance` attribute to customize that distance. For example,
+use `8` to leave extra room for a taller character. Zero is valid. Missing,
+negative, non-finite, and nonnumeric values fall back to four studs.
 
 This example uses Cooldown and CleanupBag from the 0.2.0 branch. It stores progress
 only for the current server session; it does not save DataStore progress or grant
@@ -53,6 +57,7 @@ lua5.4 scripts/checkpoint-lifecycle-tests.lua examples/Checkpoints.server.luau
 The harness executes the actual example source with mocked services. It checks
 normal respawn, script destruction during root loading, and player departure
 during root loading. It also covers root timeout, character replacement, and tag
-removal while the root is loading. The expected result is `6 mocked scenarios passed`.
+removal while the root is loading, plus default, custom, zero, and invalid spawn
+clearance. The expected result is `12 mocked scenarios passed`.
 The mocks substitute CleanupBag, Cooldown, geometry, and event delivery, so the
 Studio checklist above remains required. CI runs this command automatically.

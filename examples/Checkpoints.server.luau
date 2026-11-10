@@ -28,7 +28,11 @@ local function trackPlayer(player)
 			and part:IsDescendantOf(workspace)
 			and CollectionService:HasTag(part, "ToolkitCheckpoint")
 		then
-			character:PivotTo(part.CFrame + Vector3.new(0, part.Size.Y / 2 + 4, 0))
+			local clearance = part:GetAttribute("CheckpointSpawnClearance")
+			if type(clearance) ~= "number" or not (clearance >= 0 and clearance < math.huge) then
+				clearance = 4
+			end
+			character:PivotTo(part.CFrame + Vector3.new(0, part.Size.Y / 2 + clearance, 0))
 		end
 	end))
 end

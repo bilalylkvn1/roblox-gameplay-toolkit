@@ -19,7 +19,7 @@ local function signal()
 	end
 	return s
 end
-local function scenario(stopDuringWait)
+local function scenario(stopDuringWait, clearance, expectedHeight)
 	local added, removing, destroyed = signal(), signal(), signal()
 	local characterAdded = signal()
 	local players = { PlayerAdded = added, PlayerRemoving = removing }
@@ -37,6 +37,10 @@ local function scenario(stopDuringWait)
 	end
 	function part:IsDescendantOf()
 		return true
+	end
+	function part:GetAttribute(name)
+		assert(name == "CheckpointSpawnClearance")
+		return clearance
 	end
 	local tagged = true
 	local tags = {}
@@ -102,8 +106,8 @@ local function scenario(stopDuringWait)
 			return toolkit
 		end,
 		Vector3 = {
-			new = function()
-				return 0
+			new = function(_, y)
+				return y
 			end,
 		},
 		table = setmetatable({
@@ -121,7 +125,8 @@ local function scenario(stopDuringWait)
 	function character:FindFirstChildOfClass()
 		return { Health = 100 }
 	end
-	function character:PivotTo()
+	function character:PivotTo(height)
+		assert(height == (expectedHeight or 5), stopDuringWait .. " respawn height")
 		pivots = pivots + 1
 	end
 	function character:WaitForChild()
@@ -154,4 +159,10 @@ scenario("leave")
 scenario("timeout")
 scenario("replaced")
 scenario("untagged")
-print("checkpoint lifecycle: 6 mocked scenarios passed")
+scenario("normal", 8, 9)
+scenario("normal", 0, 1)
+scenario("normal", -1)
+scenario("normal", math.huge)
+scenario("normal", 0 / 0)
+scenario("normal", "8")
+print("checkpoint lifecycle: 12 mocked scenarios passed")
