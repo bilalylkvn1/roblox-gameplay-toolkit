@@ -58,6 +58,7 @@ The harness executes the actual example source with mocked services. It checks
 normal respawn, script destruction during root loading, and player departure
 during root loading. It also covers root timeout, character replacement, and tag
 removal while the root is loading, plus default, custom, zero, and invalid spawn
-clearance. The expected result is `12 mocked scenarios passed`.
+clearance. It verifies that a queued touch from a removed tag cannot save a checkpoint
+if the same platform is tagged again. The expected result is `13 mocked scenarios passed`.
 The mocks substitute CleanupBag, Cooldown, geometry, and event delivery, so the
 Studio checklist above remains required. CI runs this command automatically.

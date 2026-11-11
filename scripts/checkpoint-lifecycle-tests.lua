@@ -43,6 +43,7 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 		return clearance
 	end
 	local tagged = true
+	local tagAdded, tagRemoved = signal(), signal()
 	local tags = {}
 	function tags:GetTagged()
 		return { part }
@@ -51,10 +52,10 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 		return tagged
 	end
 	function tags:GetInstanceAddedSignal()
-		return signal()
+		return tagAdded
 	end
 	function tags:GetInstanceRemovedSignal()
-		return signal()
+		return tagRemoved
 	end
 	local toolkit = { CleanupBag = {}, Cooldown = {} }
 	function toolkit.CleanupBag.new()
@@ -149,7 +150,16 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 			return character
 		end,
 	}
-	touched:Fire(hit)
+	if stopDuringWait == "stale-touch" then
+		local queuedTouch = touched.callbacks[1][1]
+		tagged = false
+		tagRemoved:Fire(part)
+		tagged = true
+		tagAdded:Fire(part)
+		queuedTouch(hit)
+	else
+		touched:Fire(hit)
+	end
 	characterAdded:Fire(character)
 	assert(pivots == (stopDuringWait == "normal" and 1 or 0), stopDuringWait)
 end
@@ -165,4 +175,5 @@ scenario("normal", -1)
 scenario("normal", math.huge)
 scenario("normal", 0 / 0)
 scenario("normal", "8")
-print("checkpoint lifecycle: 12 mocked scenarios passed")
+scenario("stale-touch")
+print("checkpoint lifecycle: 13 mocked scenarios passed")

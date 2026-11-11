@@ -62,6 +62,8 @@ local function trackPart(part)
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		if
 			stopped
+			or partBags[part] ~= owned
+			or not CollectionService:HasTag(part, "ToolkitCheckpoint")
 			or not player
 			or not humanoid
 			or humanoid.Health <= 0
