@@ -76,9 +76,11 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 		end
 		return b
 	end
+	local touchAttempts = 0
 	function toolkit.Cooldown.new()
 		return {
 			Try = function()
+				touchAttempts = touchAttempts + 1
 				return true
 			end,
 			Forget = function() end,
@@ -157,6 +159,10 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 		tagged = true
 		tagAdded:Fire(part)
 		queuedTouch(hit)
+	elseif stopDuringWait == "departed-touch" then
+		removing:Fire(player)
+		touched:Fire(hit)
+		assert(touchAttempts == 0, "departed-touch must not recreate player state")
 	else
 		touched:Fire(hit)
 	end
@@ -176,4 +182,5 @@ scenario("normal", math.huge)
 scenario("normal", 0 / 0)
 scenario("normal", "8")
 scenario("stale-touch")
-print("checkpoint lifecycle: 13 mocked scenarios passed")
+scenario("departed-touch")
+print("checkpoint lifecycle: 14 mocked scenarios passed")

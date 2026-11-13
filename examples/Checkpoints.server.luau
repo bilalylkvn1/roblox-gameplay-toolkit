@@ -65,6 +65,8 @@ local function trackPart(part)
 			or partBags[part] ~= owned
 			or not CollectionService:HasTag(part, "ToolkitCheckpoint")
 			or not player
+			or not playerBags[player]
+			or player.Parent ~= Players
 			or not humanoid
 			or humanoid.Health <= 0
 			or not part:IsDescendantOf(workspace)
