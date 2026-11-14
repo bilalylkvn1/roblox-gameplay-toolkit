@@ -23,6 +23,12 @@ jobs:
         run: /tmp/luau/luau scripts/money-tests.luau
       - name: Gameplay utility suite
         run: /tmp/luau/luau scripts/utility-tests.luau
+      - name: Install Lua 5.4 for checkpoint mocks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4
+      - name: Mocked checkpoint lifecycle
+        run: lua5.4 scripts/checkpoint-lifecycle-tests.lua examples/Checkpoints.server.luau
       - name: Analyze engine-independent code
         run: /tmp/luau/luau-analyze src/Money.luau src/CleanupBag.luau src/Cooldown.luau src/RateLimiter.luau src/WeightedRandom.luau tests/Utilities.spec.luau scripts/utility-tests.luau
       - name: Install official Lune 0.10.5 and StyLua 2.6.0
@@ -51,6 +57,8 @@ jobs:
         run: |
           /tmp/rojo/rojo build default.project.json -o dist/GameplayToolkit.rbxmx
           /tmp/rojo/rojo build demo.project.json -o dist/GameplayToolkitDemo.rbxlx
+      - name: Build standalone checkpoint place
+        run: /tmp/rojo/rojo build checkpoints.project.json -o "$RUNNER_TEMP/GameplayToolkitCheckpoints.rbxlx"
       - name: Ensure committed Studio downloads match source
         run: git diff --exit-code -- dist
       - name: Upload validated Studio downloads
@@ -60,6 +68,7 @@ jobs:
           path: |
             dist/GameplayToolkit.rbxmx
             dist/GameplayToolkitDemo.rbxlx
+            ${{ runner.temp }}/GameplayToolkitCheckpoints.rbxlx
           if-no-files-found: error
           retention-days: 14
 
