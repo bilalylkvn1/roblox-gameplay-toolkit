@@ -16,15 +16,18 @@ local function trackPlayer(player)
 	local owned = Toolkit.CleanupBag.new()
 	playerBags[player] = owned
 	owned:Add(player.CharacterAdded:Connect(function(character)
-		local root = character:WaitForChild("HumanoidRootPart", 10)
 		local part = checkpoints[player]
+		if not part then
+			return
+		end
+		local root = character:WaitForChild("HumanoidRootPart", 10)
 		if
 			not stopped
 			and playerBags[player] == owned
 			and player.Parent == Players
 			and root
 			and player.Character == character
-			and part
+			and checkpoints[player] == part
 			and part:IsDescendantOf(workspace)
 			and CollectionService:HasTag(part, "ToolkitCheckpoint")
 		then

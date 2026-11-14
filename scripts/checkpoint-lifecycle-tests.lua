@@ -132,7 +132,9 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 		assert(height == (expectedHeight or 5), stopDuringWait .. " respawn height")
 		pivots = pivots + 1
 	end
+	local rootWaits = 0
 	function character:WaitForChild()
+		rootWaits = rootWaits + 1
 		if stopDuringWait == "destroy" then
 			destroyed:Fire()
 		elseif stopDuringWait == "leave" then
@@ -163,10 +165,13 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 		removing:Fire(player)
 		touched:Fire(hit)
 		assert(touchAttempts == 0, "departed-touch must not recreate player state")
-	else
+	elseif stopDuringWait ~= "no-checkpoint" then
 		touched:Fire(hit)
 	end
 	characterAdded:Fire(character)
+	if stopDuringWait == "no-checkpoint" then
+		assert(rootWaits == 0, "no-checkpoint must not wait for the root")
+	end
 	assert(pivots == (stopDuringWait == "normal" and 1 or 0), stopDuringWait)
 end
 scenario("normal")
@@ -183,4 +188,5 @@ scenario("normal", 0 / 0)
 scenario("normal", "8")
 scenario("stale-touch")
 scenario("departed-touch")
-print("checkpoint lifecycle: 14 mocked scenarios passed")
+scenario("no-checkpoint")
+print("checkpoint lifecycle: 15 mocked scenarios passed")
