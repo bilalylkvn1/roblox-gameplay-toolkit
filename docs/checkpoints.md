@@ -15,7 +15,9 @@ rewards. It accepts any tagged checkpoint, without enforcing stage order. Keep
 checkpoint platforms horizontal and provide clear space above them. A one-second
 per-player cooldown limits rapid checkpoint changes. A character that spawns
 without a saved checkpoint uses the normal spawn flow. If the saved checkpoint
-changes while the root loads, the pending move is skipped.
+changes while the root loads, the pending move is skipped. This also applies
+when the platform is untagged, tagged again, and touched during that wait. The
+new checkpoint applies on the next respawn.
 
 Tags can be added or removed at runtime. Removing a tag forgets that checkpoint
 and disconnects its touch handler. Departing players are removed from all maps, and late touches cannot recreate their state.
@@ -62,6 +64,6 @@ during root loading. It also covers root timeout, character replacement, and tag
 removal while the root is loading, plus default, custom, zero, and invalid spawn
 clearance. It verifies that a queued touch from a removed tag cannot save a checkpoint
 if the same platform is tagged again. It also checks that a spawn without a saved checkpoint does not wait for the root.
-The expected result is `15 mocked scenarios passed`.
+The expected result is `16 mocked scenarios passed`.
 The mocks substitute CleanupBag, Cooldown, geometry, and event delivery, so the
 Studio checklist above remains required. CI runs this command automatically.

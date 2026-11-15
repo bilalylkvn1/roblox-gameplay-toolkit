@@ -20,6 +20,7 @@ local function trackPlayer(player)
 		if not part then
 			return
 		end
+		local checkpointConnection = partBags[part]
 		local root = character:WaitForChild("HumanoidRootPart", 10)
 		if
 			not stopped
@@ -28,6 +29,7 @@ local function trackPlayer(player)
 			and root
 			and player.Character == character
 			and checkpoints[player] == part
+			and partBags[part] == checkpointConnection
 			and part:IsDescendantOf(workspace)
 			and CollectionService:HasTag(part, "ToolkitCheckpoint")
 		then

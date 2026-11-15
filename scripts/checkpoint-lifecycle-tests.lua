@@ -132,6 +132,11 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 		assert(height == (expectedHeight or 5), stopDuringWait .. " respawn height")
 		pivots = pivots + 1
 	end
+	local hit = {
+		FindFirstAncestorOfClass = function()
+			return character
+		end,
+	}
 	local rootWaits = 0
 	function character:WaitForChild()
 		rootWaits = rootWaits + 1
@@ -146,14 +151,15 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 			player.Character = {}
 		elseif stopDuringWait == "untagged" then
 			tagged = false
+		elseif stopDuringWait == "retagged-and-touched" then
+			tagged = false
+			tagRemoved:Fire(part)
+			tagged = true
+			tagAdded:Fire(part)
+			touched:Fire(hit)
 		end
 		return {}
 	end
-	local hit = {
-		FindFirstAncestorOfClass = function()
-			return character
-		end,
-	}
 	if stopDuringWait == "stale-touch" then
 		local queuedTouch = touched.callbacks[1][1]
 		tagged = false
@@ -189,4 +195,5 @@ scenario("normal", "8")
 scenario("stale-touch")
 scenario("departed-touch")
 scenario("no-checkpoint")
-print("checkpoint lifecycle: 15 mocked scenarios passed")
+scenario("retagged-and-touched")
+print("checkpoint lifecycle: 16 mocked scenarios passed")
