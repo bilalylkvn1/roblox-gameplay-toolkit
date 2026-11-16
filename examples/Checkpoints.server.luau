@@ -56,7 +56,7 @@ local function untrackPart(part)
 end
 
 local function trackPart(part)
-	if not part:IsA("BasePart") or partBags[part] then
+	if not part:IsA("BasePart") or not part.CanTouch or partBags[part] then
 		return
 	end
 	local owned = Toolkit.CleanupBag.new()

@@ -31,7 +31,13 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 		return c == player.Character and player
 	end
 	local touched = signal()
-	local part = { Touched = touched, CFrame = 0, Size = { Y = 2 } }
+	local part = { Touched = touched, CFrame = 0, Size = { Y = 2 }, CanTouch = true }
+	if stopDuringWait == "disabled-pad" then
+		part.CanTouch = false
+		function touched:Connect()
+			error("cannot connect Touched while CanTouch is false")
+		end
+	end
 	function part:IsA(name)
 		return name == "BasePart"
 	end
@@ -196,4 +202,5 @@ scenario("stale-touch")
 scenario("departed-touch")
 scenario("no-checkpoint")
 scenario("retagged-and-touched")
-print("checkpoint lifecycle: 16 mocked scenarios passed")
+scenario("disabled-pad")
+print("checkpoint lifecycle: 17 mocked scenarios passed")

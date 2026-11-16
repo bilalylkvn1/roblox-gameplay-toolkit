@@ -19,7 +19,9 @@ changes while the root loads, the pending move is skipped. This also applies
 when the platform is untagged, tagged again, and touched during that wait. The
 new checkpoint applies on the next respawn.
 
-Tags can be added or removed at runtime. Removing a tag forgets that checkpoint
+Tags can be added or removed at runtime. Enable `CanTouch` before tagging a
+platform. If a tagged platform was ignored because `CanTouch` was off, enable
+it and reapply the tag to register the platform. Removing a tag forgets that checkpoint
 and disconnects its touch handler. Departing players are removed from all maps, and late touches cannot recreate their state.
 Destroying the script cleans up its owned connections. Disable/re-enable lifecycle
 is not supported; destroy and reinstall the script to stop/restart it.
@@ -64,6 +66,6 @@ during root loading. It also covers root timeout, character replacement, and tag
 removal while the root is loading, plus default, custom, zero, and invalid spawn
 clearance. It verifies that a queued touch from a removed tag cannot save a checkpoint
 if the same platform is tagged again. It also checks that a spawn without a saved checkpoint does not wait for the root.
-The expected result is `16 mocked scenarios passed`.
+The expected result is `17 mocked scenarios passed`.
 The mocks substitute CleanupBag, Cooldown, geometry, and event delivery, so the
 Studio checklist above remains required. CI runs this command automatically.
