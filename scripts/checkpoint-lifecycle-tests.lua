@@ -151,6 +151,8 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 		elseif stopDuringWait == "leave" then
 			removing:Fire(player)
 			player.Parent = nil
+		elseif stopDuringWait == "touch-disabled-during-respawn" then
+			part.CanTouch = false
 		elseif stopDuringWait == "timeout" then
 			return nil
 		elseif stopDuringWait == "replaced" then
@@ -203,4 +205,5 @@ scenario("departed-touch")
 scenario("no-checkpoint")
 scenario("retagged-and-touched")
 scenario("disabled-pad")
-print("checkpoint lifecycle: 17 mocked scenarios passed")
+scenario("touch-disabled-during-respawn")
+print("checkpoint lifecycle: 18 mocked scenarios passed")

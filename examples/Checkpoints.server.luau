@@ -30,6 +30,7 @@ local function trackPlayer(player)
 			and player.Character == character
 			and checkpoints[player] == part
 			and partBags[part] == checkpointConnection
+			and part.CanTouch
 			and part:IsDescendantOf(workspace)
 			and CollectionService:HasTag(part, "ToolkitCheckpoint")
 		then
