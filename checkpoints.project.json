@@ -1,0 +1,105 @@
+{
+  "name": "GameplayToolkitCheckpoints",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "GameplayToolkit": {
+        "$path": "src"
+      }
+    },
+    "ServerScriptService": {
+      "Checkpoints": {
+        "$path": "examples/Checkpoints.server.luau"
+      }
+    },
+    "Workspace": {
+      "Floor": {
+        "$className": "Part",
+        "$properties": {
+          "Anchored": true,
+          "Size": [
+            80,
+            1,
+            60
+          ],
+          "Position": [
+            0,
+            -0.5,
+            0
+          ]
+        }
+      },
+      "Spawn": {
+        "$className": "SpawnLocation",
+        "$properties": {
+          "Anchored": true,
+          "Size": [
+            12,
+            1,
+            12
+          ],
+          "Position": [
+            0,
+            0.5,
+            12
+          ],
+          "Neutral": true
+        }
+      },
+      "BlueCheckpoint": {
+        "$className": "Part",
+        "$properties": {
+          "Anchored": true,
+          "Size": [
+            12,
+            1,
+            12
+          ],
+          "Position": [
+            -16,
+            0.5,
+            -12
+          ],
+          "Color": [
+            0.18,
+            0.5,
+            0.9
+          ],
+          "CanTouch": true,
+          "Tags": {
+            "Tags": [
+              "ToolkitCheckpoint"
+            ]
+          }
+        }
+      },
+      "GreenCheckpoint": {
+        "$className": "Part",
+        "$properties": {
+          "Anchored": true,
+          "Size": [
+            12,
+            1,
+            12
+          ],
+          "Position": [
+            16,
+            0.5,
+            -12
+          ],
+          "Color": [
+            0.22,
+            0.68,
+            0.36
+          ],
+          "CanTouch": true,
+          "Tags": {
+            "Tags": [
+              "ToolkitCheckpoint"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
