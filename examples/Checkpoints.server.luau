@@ -22,11 +22,14 @@ local function trackPlayer(player)
 		end
 		local checkpointConnection = partBags[part]
 		local root = character:WaitForChild("HumanoidRootPart", 10)
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
 		if
 			not stopped
 			and playerBags[player] == owned
 			and player.Parent == Players
 			and root
+			and humanoid
+			and humanoid.Health > 0
 			and player.Character == character
 			and checkpoints[player] == part
 			and partBags[part] == checkpointConnection

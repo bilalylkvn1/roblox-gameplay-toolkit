@@ -131,8 +131,9 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 	local pivots = 0
 	local character = {}
 	player.Character = character
+	local humanoid = { Health = 100 }
 	function character:FindFirstChildOfClass()
-		return { Health = 100 }
+		return humanoid
 	end
 	function character:PivotTo(height)
 		assert(height == (expectedHeight or 5), stopDuringWait .. " respawn height")
@@ -153,6 +154,10 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 			player.Parent = nil
 		elseif stopDuringWait == "touch-disabled-during-respawn" then
 			part.CanTouch = false
+		elseif stopDuringWait == "died-during-respawn" then
+			humanoid.Health = 0
+		elseif stopDuringWait == "missing-humanoid" then
+			humanoid = nil
 		elseif stopDuringWait == "timeout" then
 			return nil
 		elseif stopDuringWait == "replaced" then
@@ -206,4 +211,6 @@ scenario("no-checkpoint")
 scenario("retagged-and-touched")
 scenario("disabled-pad")
 scenario("touch-disabled-during-respawn")
-print("checkpoint lifecycle: 18 mocked scenarios passed")
+scenario("died-during-respawn")
+scenario("missing-humanoid")
+print("checkpoint lifecycle: 20 mocked scenarios passed")
