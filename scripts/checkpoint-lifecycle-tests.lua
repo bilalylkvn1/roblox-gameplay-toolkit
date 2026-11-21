@@ -44,7 +44,11 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 	function part:IsDescendantOf()
 		return true
 	end
+	local checkpointEnabled = true
 	function part:GetAttribute(name)
+		if name == "CheckpointEnabled" then
+			return checkpointEnabled
+		end
 		assert(name == "CheckpointSpawnClearance")
 		return clearance
 	end
@@ -158,6 +162,8 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 			humanoid.Health = 0
 		elseif stopDuringWait == "missing-humanoid" then
 			humanoid = nil
+		elseif stopDuringWait == "checkpoint-disabled-during-respawn" then
+			checkpointEnabled = false
 		elseif stopDuringWait == "timeout" then
 			return nil
 		elseif stopDuringWait == "replaced" then
@@ -184,6 +190,10 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 		removing:Fire(player)
 		touched:Fire(hit)
 		assert(touchAttempts == 0, "departed-touch must not recreate player state")
+	elseif stopDuringWait == "checkpoint-disabled-touch" then
+		checkpointEnabled = false
+		touched:Fire(hit)
+		assert(touchAttempts == 0, "disabled checkpoint must reject touches")
 	elseif stopDuringWait ~= "no-checkpoint" then
 		touched:Fire(hit)
 	end
@@ -213,4 +223,6 @@ scenario("disabled-pad")
 scenario("touch-disabled-during-respawn")
 scenario("died-during-respawn")
 scenario("missing-humanoid")
-print("checkpoint lifecycle: 20 mocked scenarios passed")
+scenario("checkpoint-disabled-touch")
+scenario("checkpoint-disabled-during-respawn")
+print("checkpoint lifecycle: 22 mocked scenarios passed")

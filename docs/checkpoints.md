@@ -66,7 +66,7 @@ during root loading. It also covers root timeout, character replacement, and tag
 removal while the root is loading, plus default, custom, zero, and invalid spawn
 clearance. It verifies that a queued touch from a removed tag cannot save a checkpoint
 if the same platform is tagged again. It also checks that a spawn without a saved checkpoint does not wait for the root.
-The expected result is `20 mocked scenarios passed`.
+The expected result is `22 mocked scenarios passed`.
 The mocks substitute CleanupBag, Cooldown, geometry, and event delivery, so the
 Studio checklist above remains required. CI runs this command automatically.
 
@@ -76,3 +76,11 @@ its handler if Roblox disconnected it.
 
 A pending checkpoint move is skipped if the character dies or loses its Humanoid
 while the root is loading. The next live character can use the saved checkpoint.
+
+## Temporarily disabling a checkpoint
+
+Set a platform's boolean `CheckpointEnabled` attribute to `false` to pause touch
+registration and respawn moves. Set it to `true`, or remove the attribute, to
+resume. Saved checkpoints are retained while disabled. A character spawning
+during that time uses the normal spawn. Use this attribute for round transitions
+while keeping `CanTouch` enabled and the `ToolkitCheckpoint` tag applied.
