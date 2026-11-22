@@ -19,7 +19,7 @@ local function signal()
 	end
 	return s
 end
-local function scenario(stopDuringWait, clearance, expectedHeight)
+local function scenario(stopDuringWait, clearance, expectedHeight, firstStage, secondStage, acceptSecond)
 	local added, removing, destroyed = signal(), signal(), signal()
 	local characterAdded = signal()
 	local players = { PlayerAdded = added, PlayerRemoving = removing }
@@ -46,6 +46,9 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 	end
 	local checkpointEnabled = true
 	function part:GetAttribute(name)
+		if name == "CheckpointStage" then
+			return firstStage
+		end
 		if name == "CheckpointEnabled" then
 			return checkpointEnabled
 		end
@@ -132,6 +135,14 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 		}, { __index = table }),
 	}, { __index = _G })
 	assert(loadfile(arg[1], "t", env))()
+	local secondTouched = signal()
+	local secondPart = setmetatable({ Touched = secondTouched, CFrame = 20 }, { __index = part })
+	function secondPart:GetAttribute(name)
+		if name == "CheckpointStage" then
+			return secondStage
+		end
+		return part:GetAttribute(name)
+	end
 	local pivots = 0
 	local character = {}
 	player.Character = character
@@ -197,11 +208,16 @@ local function scenario(stopDuringWait, clearance, expectedHeight)
 	elseif stopDuringWait ~= "no-checkpoint" then
 		touched:Fire(hit)
 	end
+	if stopDuringWait == "ordered" then
+		tagAdded:Fire(secondPart)
+		secondTouched:Fire(hit)
+		assert(touchAttempts == (acceptSecond and 2 or 1), "rejected stages must not consume cooldown")
+	end
 	characterAdded:Fire(character)
 	if stopDuringWait == "no-checkpoint" then
 		assert(rootWaits == 0, "no-checkpoint must not wait for the root")
 	end
-	assert(pivots == (stopDuringWait == "normal" and 1 or 0), stopDuringWait)
+	assert(pivots == ((stopDuringWait == "normal" or stopDuringWait == "ordered") and 1 or 0), stopDuringWait)
 end
 scenario("normal")
 scenario("destroy")
@@ -225,4 +241,14 @@ scenario("died-during-respawn")
 scenario("missing-humanoid")
 scenario("checkpoint-disabled-touch")
 scenario("checkpoint-disabled-during-respawn")
-print("checkpoint lifecycle: 22 mocked scenarios passed")
+scenario("ordered", nil, 25, 1, 2, true)
+scenario("ordered", nil, 5, 2, 1, false)
+scenario("ordered", nil, 5, 2, 2, false)
+scenario("ordered", nil, 25, nil, 1, true)
+scenario("ordered", nil, 25, 1, nil, true)
+scenario("ordered", nil, 25, 2, 1.5, true)
+scenario("ordered", nil, 25, 2, 0, true)
+scenario("ordered", nil, 25, 2, math.huge, true)
+scenario("ordered", nil, 25, 2, 0 / 0, true)
+scenario("ordered", nil, 25, 2, "1", true)
+print("checkpoint lifecycle: 32 mocked scenarios passed")

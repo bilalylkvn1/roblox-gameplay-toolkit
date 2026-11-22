@@ -9,6 +9,15 @@ local partBags = {}
 local playerBags = {}
 local stopped = false
 
+-- Only positive, finite integer stages participate in ordering.
+local function getStage(part)
+	local stage = part:GetAttribute("CheckpointStage")
+	if type(stage) == "number" and stage >= 1 and stage < math.huge and stage % 1 == 0 then
+		return stage
+	end
+	return nil
+end
+
 local function trackPlayer(player)
 	if playerBags[player] then
 		return
@@ -84,7 +93,13 @@ local function trackPart(part)
 		then
 			return
 		end
-		if checkpoints[player] ~= part and touches:Try(player) then
+		local previous = checkpoints[player]
+		local previousStage = previous and getStage(previous)
+		local nextStage = getStage(part)
+		if previousStage and nextStage and nextStage <= previousStage then
+			return
+		end
+		if previous ~= part and touches:Try(player) then
 			checkpoints[player] = part
 		end
 	end))

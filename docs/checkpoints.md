@@ -11,7 +11,7 @@ negative, non-finite, and nonnumeric values fall back to four studs.
 
 This example uses Cooldown and CleanupBag from the 0.2.0 branch. It stores progress
 only for the current server session; it does not save DataStore progress or grant
-rewards. It accepts any tagged checkpoint, without enforcing stage order. Keep
+rewards. By default it accepts any tagged checkpoint. Optional stage ordering is described below. Keep
 checkpoint platforms horizontal and provide clear space above them. A one-second
 per-player cooldown limits rapid checkpoint changes. A character that spawns
 without a saved checkpoint uses the normal spawn flow. If the saved checkpoint
@@ -66,7 +66,7 @@ during root loading. It also covers root timeout, character replacement, and tag
 removal while the root is loading, plus default, custom, zero, and invalid spawn
 clearance. It verifies that a queued touch from a removed tag cannot save a checkpoint
 if the same platform is tagged again. It also checks that a spawn without a saved checkpoint does not wait for the root.
-The expected result is `22 mocked scenarios passed`.
+The expected result is `32 mocked scenarios passed`.
 The mocks substitute CleanupBag, Cooldown, geometry, and event delivery, so the
 Studio checklist above remains required. CI runs this command automatically.
 
@@ -84,3 +84,33 @@ registration and respawn moves. Set it to `true`, or remove the attribute, to
 resume. Saved checkpoints are retained while disabled. A character spawning
 during that time uses the normal spawn. Use this attribute for round transitions
 while keeping `CanTouch` enabled and the `ToolkitCheckpoint` tag applied.
+
+## Optional stage ordering for obbies
+
+Set the numeric `CheckpointStage` attribute on every checkpoint in an ordered
+course, using positive integers such as 1, 2, and 3. When both the saved platform
+and the newly touched platform have valid stages, only a strictly higher stage
+can replace the saved checkpoint. Touching an earlier stage or a second platform
+with the same stage preserves progress and does not consume the touch cooldown.
+The first checkpoint is accepted normally, and forward stage skips are allowed;
+this is not a sequential completion or reward-validation system.
+
+For example, set these attributes in a server setup script (the parts must
+already carry the `ToolkitCheckpoint` tag):
+
+```lua
+workspace.BlueCheckpoint:SetAttribute("CheckpointStage", 1)
+workspace.GreenCheckpoint:SetAttribute("CheckpointStage", 2)
+```
+
+After reaching green, touching blue does not move the saved respawn back to blue.
+Stage values are read on each touch. Missing, zero, negative, fractional,
+non-finite, and nonnumeric values are unordered: if either platform is unordered,
+the existing last-touch behavior applies. Use valid stages on **all** course pads
+to prevent backtracking. Tag removal still clears saved progress, and stage
+ordering does not persist between sessions.
+
+Portable tests cover forward, backward, equal, mixed unordered, and invalid
+stages. In Studio, also verify two players independently advance blue to green,
+then return to blue and reset: both should respawn at green. This engine check
+has not yet been run.
