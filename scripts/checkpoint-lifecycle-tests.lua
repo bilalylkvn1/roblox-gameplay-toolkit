@@ -19,7 +19,14 @@ local function signal()
 	end
 	return s
 end
-local function scenario(stopDuringWait, clearance, expectedHeight, firstStage, secondStage, acceptSecond)
+local function scenario(
+	stopDuringWait,
+	clearance,
+	expectedHeight,
+	firstStage,
+	secondStage,
+	acceptSecond
+)
 	local added, removing, destroyed = signal(), signal(), signal()
 	local characterAdded = signal()
 	local players = { PlayerAdded = added, PlayerRemoving = removing }
@@ -211,13 +218,19 @@ local function scenario(stopDuringWait, clearance, expectedHeight, firstStage, s
 	if stopDuringWait == "ordered" then
 		tagAdded:Fire(secondPart)
 		secondTouched:Fire(hit)
-		assert(touchAttempts == (acceptSecond and 2 or 1), "rejected stages must not consume cooldown")
+		assert(
+			touchAttempts == (acceptSecond and 2 or 1),
+			"rejected stages must not consume cooldown"
+		)
 	end
 	characterAdded:Fire(character)
 	if stopDuringWait == "no-checkpoint" then
 		assert(rootWaits == 0, "no-checkpoint must not wait for the root")
 	end
-	assert(pivots == ((stopDuringWait == "normal" or stopDuringWait == "ordered") and 1 or 0), stopDuringWait)
+	assert(
+		pivots == ((stopDuringWait == "normal" or stopDuringWait == "ordered") and 1 or 0),
+		stopDuringWait
+	)
 end
 scenario("normal")
 scenario("destroy")
