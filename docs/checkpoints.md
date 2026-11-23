@@ -36,8 +36,12 @@ rojo build checkpoints.project.json -o GameplayToolkitCheckpoints.rbxlx
 ```
 
 Open the place in Studio and start a local server with two players. The blue and
-green pads already carry the `ToolkitCheckpoint` tag. Walk one player onto each
-pad, then reset both characters. Each should reappear over their own pad.
+green pads already carry the `ToolkitCheckpoint` tag and stages 1 and 2 respectively.
+Walk one player onto each pad, then reset both characters. Each should reappear
+over their own pad. Next walk the blue player to green, wait at least one second,
+then walk back to blue and reset: that player should stay at green. Keep the other
+player on blue to check that progress remains independent. To try unordered
+last-touch behavior, remove `CheckpointStage` from both pads in Studio.
 
 ## Required Studio validation (not yet run)
 

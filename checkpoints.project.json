@@ -71,6 +71,9 @@
               "ToolkitCheckpoint"
             ]
           }
+        },
+        "$attributes": {
+          "CheckpointStage": 1
         }
       },
       "GreenCheckpoint": {
@@ -98,6 +101,9 @@
               "ToolkitCheckpoint"
             ]
           }
+        },
+        "$attributes": {
+          "CheckpointStage": 2
         }
       }
     }
