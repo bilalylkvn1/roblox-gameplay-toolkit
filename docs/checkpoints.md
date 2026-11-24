@@ -118,3 +118,12 @@ Portable tests cover forward, backward, equal, mixed unordered, and invalid
 stages. In Studio, also verify two players independently advance blue to green,
 then return to blue and reset: both should respawn at green. This engine check
 has not yet been run.
+
+## Respawn motion
+
+After a successful checkpoint move, the root assembly linear and angular velocities
+are cleared. This prevents previous falling or spinning motion carrying through
+the teleport. Skipped checkpoint moves leave velocity unchanged. The 32 portable
+scenarios assert both outcomes with mock root properties. In Studio, reset while
+falling or spinning and verify the character settles above its saved platform;
+real assembly physics validation remains pending.

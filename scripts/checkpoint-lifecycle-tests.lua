@@ -129,6 +129,7 @@ local function scenario(
 			return toolkit
 		end,
 		Vector3 = {
+			zero = 0,
 			new = function(_, y)
 				return y
 			end,
@@ -166,6 +167,7 @@ local function scenario(
 			return character
 		end,
 	}
+	local root = { AssemblyLinearVelocity = 50, AssemblyAngularVelocity = 10 }
 	local rootWaits = 0
 	function character:WaitForChild()
 		rootWaits = rootWaits + 1
@@ -195,7 +197,7 @@ local function scenario(
 			tagAdded:Fire(part)
 			touched:Fire(hit)
 		end
-		return {}
+		return root
 	end
 	if stopDuringWait == "stale-touch" then
 		local queuedTouch = touched.callbacks[1][1]
@@ -224,6 +226,13 @@ local function scenario(
 		)
 	end
 	characterAdded:Fire(character)
+	if pivots > 0 then
+		assert(root.AssemblyLinearVelocity == 0, "respawn must clear linear velocity")
+		assert(root.AssemblyAngularVelocity == 0, "respawn must clear angular velocity")
+	else
+		assert(root.AssemblyLinearVelocity == 50, "skipped move must preserve velocity")
+		assert(root.AssemblyAngularVelocity == 10, "skipped move must preserve spin")
+	end
 	if stopDuringWait == "no-checkpoint" then
 		assert(rootWaits == 0, "no-checkpoint must not wait for the root")
 	end

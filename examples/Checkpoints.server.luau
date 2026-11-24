@@ -52,6 +52,8 @@ local function trackPlayer(player)
 				clearance = 4
 			end
 			character:PivotTo(part.CFrame + Vector3.new(0, part.Size.Y / 2 + clearance, 0))
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity = Vector3.zero
 		end
 	end))
 end
