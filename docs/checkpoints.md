@@ -70,7 +70,7 @@ during root loading. It also covers root timeout, character replacement, and tag
 removal while the root is loading, plus default, custom, zero, and invalid spawn
 clearance. It verifies that a queued touch from a removed tag cannot save a checkpoint
 if the same platform is tagged again. It also checks that a spawn without a saved checkpoint does not wait for the root.
-The expected result is `32 mocked scenarios passed`.
+The expected result is `33 mocked scenarios passed`.
 The mocks substitute CleanupBag, Cooldown, geometry, and event delivery, so the
 Studio checklist above remains required. CI runs this command automatically.
 
@@ -123,7 +123,14 @@ has not yet been run.
 
 After a successful checkpoint move, the root assembly linear and angular velocities
 are cleared. This prevents previous falling or spinning motion carrying through
-the teleport. Skipped checkpoint moves leave velocity unchanged. The 32 portable
+the teleport. Skipped checkpoint moves leave velocity unchanged. The 33 portable
 scenarios assert both outcomes with mock root properties. In Studio, reset while
 falling or spinning and verify the character settles above its saved platform;
 real assembly physics validation remains pending.
+
+## Custom character models
+
+Touches from parts inside nested Models are resolved upward to the owning player
+character. This supports custom rigs with grouped body models. NPC models do not
+register player checkpoints. The portable nested-model regression uses mock
+ancestry; verify your actual custom rig and touch delivery in Studio before use.

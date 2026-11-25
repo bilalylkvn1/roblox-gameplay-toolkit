@@ -162,9 +162,13 @@ local function scenario(
 		assert(height == (expectedHeight or 5), stopDuringWait .. " respawn height")
 		pivots = pivots + 1
 	end
+	local nested = {}
+	function nested:FindFirstAncestorOfClass()
+		return character
+	end
 	local hit = {
 		FindFirstAncestorOfClass = function()
-			return character
+			return stopDuringWait == "nested-character" and nested or character
 		end,
 	}
 	local root = { AssemblyLinearVelocity = 50, AssemblyAngularVelocity = 10 }
@@ -236,10 +240,10 @@ local function scenario(
 	if stopDuringWait == "no-checkpoint" then
 		assert(rootWaits == 0, "no-checkpoint must not wait for the root")
 	end
-	assert(
-		pivots == ((stopDuringWait == "normal" or stopDuringWait == "ordered") and 1 or 0),
-		stopDuringWait
-	)
+	local shouldMove = stopDuringWait == "normal"
+		or stopDuringWait == "ordered"
+		or stopDuringWait == "nested-character"
+	assert(pivots == (shouldMove and 1 or 0), stopDuringWait)
 end
 scenario("normal")
 scenario("destroy")
@@ -273,4 +277,5 @@ scenario("ordered", nil, 25, 2, 0, true)
 scenario("ordered", nil, 25, 2, math.huge, true)
 scenario("ordered", nil, 25, 2, 0 / 0, true)
 scenario("ordered", nil, 25, 2, "1", true)
-print("checkpoint lifecycle: 32 mocked scenarios passed")
+scenario("nested-character")
+print("checkpoint lifecycle: 33 mocked scenarios passed")

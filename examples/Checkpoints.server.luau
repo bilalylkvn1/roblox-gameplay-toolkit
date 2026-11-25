@@ -80,6 +80,10 @@ local function trackPart(part)
 	owned:Add(part.Touched:Connect(function(hit)
 		local character = hit:FindFirstAncestorOfClass("Model")
 		local player = character and Players:GetPlayerFromCharacter(character)
+		while character and not player do
+			character = character:FindFirstAncestorOfClass("Model")
+			player = character and Players:GetPlayerFromCharacter(character)
+		end
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		if
 			stopped
